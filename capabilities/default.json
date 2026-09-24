@@ -1,0 +1,13 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Main window: talk to the Rust core and drag the window by its header.",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "core:window:allow-start-dragging",
+    "core:window:allow-hide",
+    "core:window:allow-show",
+    "core:window:allow-set-focus"
+  ]
+}

@@ -1,0 +1,42 @@
+# BucketMount configuration — lives at ~/.config/bucketmount/config.toml
+#
+# Copy this file to a new Mac, launch BucketMount, and every enabled mount
+# comes up. Secrets are stored here in plain text, so the file is written with
+# mode 0600.
+
+# Set automatically after the first-launch prompt. `true` also (re)registers the
+# login item on a fresh machine.
+start_at_login = true
+
+# How often (seconds) to actively check that each bucket is reachable.
+health_check_interval_secs = 30
+
+# Normally the rclone bundled inside BucketMount.app is used. Uncomment to
+# override, e.g. when running the bare binary from `cargo run`.
+# rclone_path = "/opt/homebrew/bin/rclone"
+
+[[mount]]
+name = "my-bucket"                    # volume name; must be unique
+bucket = "my-bucket"                  # S3 bucket name only
+# prefix = "some/folder"              # mount a sub-folder instead of the root
+mount_point = "~/BucketMount/my-bucket"   # an empty folder; shows in Finder under Locations
+enabled = true
+read_only = false
+provider = "AWS"                      # rclone S3 provider: AWS, Cloudflare, Minio, Wasabi, DigitalOcean, Other…
+region = "us-east-1"
+# endpoint = "https://<account>.r2.cloudflarestorage.com"   # non-AWS providers
+
+# Credentials — use exactly one style:
+#   1. inline keys
+access_key_id = "AKIA..."
+secret_access_key = "..."
+#   2. the AWS default chain (env vars, ~/.aws/credentials, SSO, IAM role)
+# env_auth = true
+#   3. a remote already defined in ~/.config/rclone/rclone.conf
+# rclone_remote = "s3"
+
+# Tuning (defaults shown)
+write_back_secs = 5        # a file is uploaded this many seconds after the last write
+dir_cache_secs = 60        # how quickly changes made by other machines appear
+cache_max_size = "10G"     # cap on the local cache in ~/Library/Caches/BucketMount
+# extra_args = ["--transfers", "8"]   # any additional rclone flags

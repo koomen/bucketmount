@@ -1,0 +1,22 @@
+# Rust / Tauri build output
+/target
+/dist
+/gen/schemas
+*.app
+*.dmg
+*.zip
+
+# Local config (may contain bucket credentials) — use config.example.toml
+/config.toml
+.env
+.env.*
+
+# macOS
+.DS_Store
+._*
+
+# Editors
+.idea/
+.vscode/
+*.swp
+*~

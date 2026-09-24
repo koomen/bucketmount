@@ -1,0 +1,3 @@
+# rclone binaries are downloaded here by scripts/build-app.sh
+*
+!.gitignore

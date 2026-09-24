@@ -1,0 +1,55 @@
+name: Release
+
+# Builds a universal BucketMount.app (rclone bundled) with the Tauri bundler
+# and attaches the zip and dmg to a GitHub release. Trigger by pushing a tag
+# like v0.2.0, or run manually.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin, x86_64-apple-darwin
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install Tauri CLI
+        uses: cargo-bins/cargo-binstall@main
+      - run: cargo binstall tauri-cli@^2 -y --locked
+
+      # Optional Developer ID signing + notarization: the Tauri bundler reads
+      # these variables. Without the secrets the app is ad-hoc signed and users
+      # must allow it once in System Settings.
+      - name: Build app
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: OUT="$PWD/dist" scripts/build-app.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: BucketMount
+          path: |
+            dist/BucketMount-*.zip
+            dist/*.dmg
+
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/BucketMount-*.zip dist/*.dmg --generate-notes --title "BucketMount $GITHUB_REF_NAME"
