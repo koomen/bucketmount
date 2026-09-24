@@ -3,10 +3,12 @@
 use crate::config::{self, Config, MountConfig};
 use crate::mac;
 use crate::rclone;
+use crate::sso;
 use crate::supervisor::{self, Manager};
 use serde::Serialize;
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager as _, State};
 
@@ -15,6 +17,21 @@ pub struct AppState {
     pub config_error: Mutex<Option<String>>,
     pub manager: Mutex<Manager>,
     pub background: bool,
+    /// The SSO sign-in in progress, if any (one at a time).
+    pub login: Mutex<Option<Login>>,
+}
+
+pub struct Login {
+    pub view: LoginView,
+    pub cancel: Arc<AtomicBool>,
+}
+
+#[derive(Serialize, Clone)]
+pub struct LoginView {
+    pub profile: String,
+    /// Empty until AWS has handed out the code.
+    pub user_code: String,
+    pub url: String,
 }
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -35,6 +52,7 @@ pub struct MountView {
     pub last_ok_secs: Option<u64>,
     pub mount_path: String,
     pub mount_path_short: String,
+    pub sso_profile: Option<String>,
 }
 
 #[derive(Serialize, Clone)]
@@ -48,6 +66,7 @@ pub struct Snapshot {
     pub rclone_version: Option<String>,
     pub show_login_prompt: bool,
     pub version: &'static str,
+    pub sso_login: Option<LoginView>,
 }
 
 impl AppState {
@@ -70,6 +89,7 @@ impl AppState {
                 last_ok_secs: s.last_ok.map(|t| t.elapsed().as_secs()),
                 mount_path: m.mount_path().display().to_string(),
                 mount_path_short: config::collapse_tilde(&m.mount_path()),
+                sso_profile: s.sso_profile,
                 config: m,
             })
             .collect();
@@ -84,6 +104,7 @@ impl AppState {
             rclone_version: rclone_path.as_deref().and_then(rclone::version),
             rclone_path: rclone_path.map(|p| config::collapse_tilde(&p)),
             version: env!("CARGO_PKG_VERSION"),
+            sso_login: lock(&self.login).as_ref().map(|l| l.view.clone()),
         }
     }
 
@@ -111,6 +132,66 @@ pub fn show_window(app: &AppHandle) {
         let _ = w.unminimize();
         let _ = w.set_focus();
     }
+}
+
+/// Start an AWS SSO sign-in for the profile behind `mount` on a background
+/// thread: the browser opens on the AWS approval page, and once approved the
+/// token is cached and every supervisor re-checks its bucket.
+pub fn start_sso_login(app: &AppHandle, mount: &MountConfig) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    let rclone = lock(&state.manager).rclone().map(PathBuf::from);
+    let sp = sso::for_mount(mount, rclone.as_deref()).ok_or_else(|| {
+        "This mount does not use an AWS SSO profile. Set an AWS profile that has sso_session or sso_start_url in ~/.aws/config.".to_string()
+    })?;
+
+    let cancel = Arc::new(AtomicBool::new(false));
+    {
+        let mut login = lock(&state.login);
+        if let Some(l) = login.as_ref() {
+            if l.view.profile != sp.profile {
+                return Err(format!("A sign-in for profile '{}' is already in progress.", l.view.profile));
+            }
+            // Same profile: just bring the approval page back.
+            if !l.view.url.is_empty() {
+                mac::open_url(&l.view.url);
+            }
+            return Ok(());
+        }
+        *login = Some(Login {
+            view: LoginView { profile: sp.profile.clone(), user_code: String::new(), url: String::new() },
+            cancel: cancel.clone(),
+        });
+    }
+    crate::applog::log(format!("SSO sign-in started for profile '{}'", sp.profile));
+    let _ = app.emit("state-changed", ());
+
+    let app = app.clone();
+    std::thread::spawn(move || {
+        let result = sso::login(&sp, &cancel, |code, url| {
+            if let Some(l) = lock(&app.state::<AppState>().login).as_mut() {
+                l.view.user_code = code.to_string();
+                l.view.url = url.to_string();
+            }
+            mac::open_url(url);
+            let _ = app.emit("state-changed", ());
+        });
+        *lock(&app.state::<AppState>().login) = None;
+        match &result {
+            Ok(()) => {
+                crate::applog::log(format!("SSO sign-in for '{}' succeeded", sp.profile));
+                supervisor::LOGIN_GENERATION.fetch_add(1, Ordering::SeqCst);
+                mac::notify(config::APP_NAME, &format!("Signed in to AWS (profile {})", sp.profile));
+                let _ = app.emit("toast", "Signed in to AWS");
+            }
+            Err(e) => {
+                crate::applog::log(format!("SSO sign-in for '{}' failed: {e}", sp.profile));
+                let _ = app.emit("toast-error", format!("AWS sign-in failed: {e}"));
+            }
+        }
+        let _ = app.emit("state-changed", ());
+        crate::tray::refresh(&app);
+    });
+    Ok(())
 }
 
 // ------------------------------------------------------------------ commands
@@ -200,6 +281,19 @@ pub async fn test_connection(state: State<'_, AppState>, mount: MountConfig) -> 
     tauri::async_runtime::spawn_blocking(move || rclone::check_connectivity(&inv, Duration::from_secs(40)))
         .await
         .map_err(|e| e.to_string())?
+}
+
+/// Sign in for a mount; takes the (possibly unsaved) mount from the editor.
+#[tauri::command]
+pub fn sso_login(app: AppHandle, mount: MountConfig) -> Result<(), String> {
+    start_sso_login(&app, &mount)
+}
+
+#[tauri::command]
+pub fn cancel_sso_login(state: State<'_, AppState>) {
+    if let Some(l) = lock(&state.login).as_ref() {
+        l.cancel.store(true, Ordering::SeqCst);
+    }
 }
 
 #[tauri::command]

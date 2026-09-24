@@ -7,6 +7,7 @@ mod applog;
 mod config;
 mod mac;
 mod rclone;
+mod sso;
 mod supervisor;
 mod tray;
 
@@ -69,6 +70,7 @@ fn main() {
         config_error: Mutex::new(config_error),
         manager: Mutex::new(supervisor::Manager::new(notify, rclone)),
         background,
+        login: Mutex::new(None),
     };
 
     let tauri_app = tauri::Builder::default()
@@ -80,6 +82,8 @@ fn main() {
             app::delete_mount,
             app::set_start_at_login,
             app::test_connection,
+            app::sso_login,
+            app::cancel_sso_login,
             app::restart_mount,
             app::log_tail,
             app::open_mount,

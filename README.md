@@ -18,18 +18,38 @@ them mounted, and tells you from the menu bar when the connection is lost.
 
 ## Install
 
-1. Download `BucketMount_<version>.dmg` (or the `.zip`) from the
-   [Releases](../../releases) page and drag **BucketMount.app** to
-   `/Applications`.
-2. Open it. Because the app is not notarized by Apple, macOS will refuse the
+Every tagged version (`v0.1.0`, …) is built by GitHub Actions and published on
+the [Releases](https://github.com/koomen/bucketsync/releases) page as a
+universal (Apple silicon + Intel) `.dmg` and `.zip`.
+
+**From the Releases page:** download `BucketMount_<version>_universal.dmg`,
+open it and drag **BucketMount.app** to `/Applications`.
+
+**With the GitHub CLI** (`brew install gh`, then `gh auth login`), latest release:
+
+```sh
+tmp="$(mktemp -d)"
+gh release download --repo koomen/bucketsync --pattern 'BucketMount-*.zip' --dir "$tmp"
+osascript -e 'quit app "BucketMount"' 2>/dev/null || true   # when upgrading
+rm -rf /Applications/BucketMount.app
+ditto -x -k "$tmp"/BucketMount-*.zip /Applications
+open /Applications/BucketMount.app
+```
+
+**From source:** see [Building from source](#building-from-source).
+
+Then:
+
+1. Open it. Because the app is not notarized by Apple, macOS will refuse the
    first launch. Go to **System Settings → Privacy & Security**, scroll down,
    and click **Open Anyway** next to BucketMount, then launch it again.
-   (Alternatively: `xattr -dr com.apple.quarantine /Applications/BucketMount.app`.)
-3. On first launch it asks whether to start at login. Say yes if you want your
+   (Alternatively: `xattr -dr com.apple.quarantine /Applications/BucketMount.app`.
+   Apps installed with `gh` or built locally are not quarantined and open directly.)
+2. On first launch it asks whether to start at login. Say yes if you want your
    volumes available whenever you log in. A "Background Items Added"
    notification from macOS is expected; the entry appears under
    **System Settings → General → Login Items**.
-4. Click **Add mount**, enter the bucket, region and credentials, hit **Test
+3. Click **Add mount**, enter the bucket, region and credentials, hit **Test
    connection**, then **Save**. The volume mounts within a few seconds.
 
 Requirements: macOS 13 or newer, Apple silicon or Intel.
@@ -69,8 +89,17 @@ secret_access_key = "..."
 The UI writes this file; you can also edit it by hand and relaunch the app.
 Credentials are stored in plain text with file mode `0600`. If you would
 rather not keep keys in the file, use `env_auth = true` (AWS CLI profiles, SSO,
-instance roles) or `rclone_remote = "name"` to reuse a remote from your own
+instance roles; pick one with `aws_profile = "name"`) or
+`rclone_remote = "name"` to reuse a remote from your own
 `~/.config/rclone/rclone.conf`.
+
+**AWS SSO (IAM Identity Center).** Point `aws_profile` at a profile in
+`~/.aws/config` that has `sso_session` (or the older `sso_start_url`). The AWS
+CLI is not needed: when the session expires the mount shows *Sign-in required*
+and a notification is posted; click **Sign in** (mount card, menu bar or the
+mount's status panel), approve the code in the browser, and the token is cached
+in `~/.aws/sso/cache/` like `aws sso login` would. Mounts re-check right away.
+Short-lived access tokens are refreshed automatically in between.
 
 Set `BUCKETMOUNT_CONFIG_DIR` to use a different directory.
 
@@ -126,13 +155,18 @@ Requires Rust (stable), Xcode command line tools and the Tauri CLI
 in `ui/` is plain HTML, CSS and JavaScript loaded straight by the WebView.
 
 ```sh
+git clone git@github.com:koomen/bucketsync.git && cd bucketsync
 scripts/build-app.sh                 # universal .app + .dmg + .zip with rclone bundled -> dist/
 ARCHS=native scripts/build-app.sh    # quicker, current architecture only
-cargo tauri dev                      # run with live-reloading front end (needs binaries/ populated once by the script)
+cargo tauri dev                      # run with live-reloading front end
+cargo build                          # plain debug build
+ditto dist/BucketMount.app /Applications/BucketMount.app   # install your build
 ```
 
-The build script downloads the pinned rclone release into `binaries/` (Tauri's
-`externalBin` places it inside the bundle as `Contents/MacOS/rclone`), runs
+`scripts/fetch-rclone.sh` downloads the pinned rclone release into `binaries/`
+(Tauri's `externalBin` places it inside the bundle as `Contents/MacOS/rclone`).
+`build.rs` runs it automatically when the binary for the target is missing, so
+plain `cargo build` works on a fresh checkout. The build script fetches rclone, runs
 `cargo tauri build`, ad-hoc signs the result when no Developer ID is
 configured, and collects the outputs. If the checkout lives on a network mount
 (cargo cannot take file locks there) it mirrors the sources to

@@ -123,6 +123,10 @@ pub fn open_in_finder(path: &Path) {
     let _ = Command::new("/usr/bin/open").arg(path).spawn();
 }
 
+pub fn open_url(url: &str) {
+    let _ = Command::new("/usr/bin/open").arg(url).spawn();
+}
+
 pub fn reveal_in_finder(path: &Path) {
     let _ = Command::new("/usr/bin/open").arg("-R").arg(path).spawn();
 }

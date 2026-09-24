@@ -3,6 +3,7 @@
 //! checks and remote-control (rc) queries.
 
 use crate::config::{self, CredMode, MountConfig};
+use crate::sso;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -65,8 +66,16 @@ impl Invocation {
 
 pub fn invocation(rclone: &Path, m: &MountConfig) -> Invocation {
     let mut env = Vec::new();
+    let profile = m.aws_profile.trim();
     let remote_name = match m.cred_mode() {
-        CredMode::RcloneRemote => m.rclone_remote.trim().to_string(),
+        CredMode::RcloneRemote => {
+            let name = m.rclone_remote.trim().to_string();
+            // Env overrides only work for remote names that are valid variable names.
+            if !profile.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+                env.push((format!("RCLONE_CONFIG_{}_PROFILE", name.to_uppercase()), profile.to_string()));
+            }
+            name
+        }
         mode => {
             let key = |opt: &str| format!("RCLONE_CONFIG_{}_{}", ENV_REMOTE.to_uppercase(), opt);
             env.push((key("TYPE"), "s3".to_string()));
@@ -84,7 +93,12 @@ pub fn invocation(rclone: &Path, m: &MountConfig) -> Invocation {
                     env.push((key("ACCESS_KEY_ID"), m.access_key_id.trim().to_string()));
                     env.push((key("SECRET_ACCESS_KEY"), m.secret_access_key.trim().to_string()));
                 }
-                _ => env.push((key("ENV_AUTH"), "true".to_string())),
+                _ => {
+                    env.push((key("ENV_AUTH"), "true".to_string()));
+                    if !profile.is_empty() {
+                        env.push((key("PROFILE"), profile.to_string()));
+                    }
+                }
             }
             ENV_REMOTE.to_string()
         }
@@ -212,6 +226,8 @@ pub fn check_connectivity(inv: &Invocation, timeout: Duration) -> Result<usize, 
             .map(|v| v.len())
             .unwrap_or(0);
         Ok(n)
+    } else if sso::is_session_error(&fin.stderr) {
+        Err(sso::SESSION_EXPIRED.to_string())
     } else {
         Err(summarize_error(&fin.stderr))
     }

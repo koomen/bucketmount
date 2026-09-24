@@ -6,18 +6,23 @@ use crate::applog::log;
 use crate::config::{self, Config, MountConfig};
 use crate::mac;
 use crate::rclone::{self, Invocation, VfsStats};
+use crate::sso::{self, SsoProfile};
 use serde::Serialize;
 use std::collections::{HashMap, VecDeque};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 /// Set from the SIGTERM/SIGINT handler; every supervisor tears down when it sees it.
 pub static TERMINATE: AtomicBool = AtomicBool::new(false);
+
+/// Bumped after every successful SSO sign-in; supervisors re-check the bucket
+/// straight away instead of waiting for the next health check.
+pub static LOGIN_GENERATION: AtomicU64 = AtomicU64::new(0);
 
 /// Called whenever any mount's status changes, so the UI and tray can refresh.
 pub type Notify = Arc<dyn Fn() + Send + Sync>;
@@ -39,6 +44,8 @@ pub enum State {
     Syncing,
     /// Mounted, but the bucket cannot be reached right now.
     Disconnected,
+    /// The AWS SSO session has expired; the user has to sign in again.
+    SignInRequired,
     /// The rclone process is not running; a restart is pending.
     Down,
     /// A configuration / environment problem that a restart will not fix.
@@ -53,13 +60,14 @@ impl State {
             State::Connected => "Connected",
             State::Syncing => "Syncing",
             State::Disconnected => "Connection lost",
+            State::SignInRequired => "Sign-in required",
             State::Down => "Mount down",
             State::Error => "Error",
         }
     }
 
     pub fn is_problem(self) -> bool {
-        matches!(self, State::Disconnected | State::Down | State::Error)
+        matches!(self, State::Disconnected | State::SignInRequired | State::Down | State::Error)
     }
 
     pub fn is_healthy(self) -> bool {
@@ -73,7 +81,7 @@ impl State {
             State::Connected => 1,
             State::Syncing => 2,
             State::Starting => 3,
-            State::Disconnected | State::Down | State::Error => 4,
+            State::Disconnected | State::SignInRequired | State::Down | State::Error => 4,
         }
     }
 
@@ -88,7 +96,7 @@ impl State {
             State::Connected => (52, 199, 89),
             State::Syncing => (10, 132, 255),
             State::Starting => (255, 159, 10),
-            State::Disconnected | State::Down | State::Error => (255, 69, 58),
+            State::Disconnected | State::SignInRequired | State::Down | State::Error => (255, 69, 58),
         }
     }
 }
@@ -106,6 +114,8 @@ pub struct MountStatus {
     pub last_ok: Option<Instant>,
     pub last_error: Option<String>,
     pub log_tail: VecDeque<String>,
+    /// The AWS SSO profile behind this mount, if its credentials come from one.
+    pub sso_profile: Option<String>,
 }
 
 impl MountStatus {
@@ -122,6 +132,7 @@ impl MountStatus {
             last_ok: None,
             last_error: None,
             log_tail: VecDeque::new(),
+            sso_profile: None,
         }
     }
 }
@@ -317,6 +328,7 @@ impl Ctx {
                 self.last_notify = Some(Instant::now());
                 let what = match state {
                     State::Disconnected => "connection to the bucket lost",
+                    State::SignInRequired => "AWS sign-in required. Open BucketMount and click Sign in",
                     State::Down => "mount stopped, restarting",
                     _ => "needs attention",
                 };
@@ -361,8 +373,10 @@ fn run(cfg: MountConfig, mut ctx: Ctx, rclone: Option<PathBuf>, health_interval:
         }
 
         let inv = rclone::invocation(&rclone, &cfg);
+        let sso = sso::for_mount(&cfg, Some(&rclone));
+        ctx.update(|s| s.sso_profile = sso.as_ref().map(|p| p.profile.clone()));
         let started = Instant::now();
-        let reason = run_session(&cfg, &inv, &mount_point, &mut ctx, health_interval);
+        let reason = run_session(&cfg, &inv, sso.as_ref(), &mount_point, &mut ctx, health_interval);
         ctx.update(|s| {
             s.pid = None;
             s.mounted = false;
@@ -383,11 +397,17 @@ fn run(cfg: MountConfig, mut ctx: Ctx, rclone: Option<PathBuf>, health_interval:
         attempts += 1;
         ctx.update(|s| s.restarts += 1);
         let delay = (1u64 << attempts.min(6)).clamp(2, 60);
+        let signin = sso.as_ref().is_some_and(|p| sso::is_session_error(&reason) || p.needs_login());
+        let generation = LOGIN_GENERATION.load(Ordering::SeqCst);
         for remaining in (1..=delay).rev() {
-            if ctx.stopping() {
+            if ctx.stopping() || LOGIN_GENERATION.load(Ordering::SeqCst) != generation {
                 break;
             }
-            ctx.set(State::Down, format!("{reason}. Restarting in {remaining}s"));
+            if signin {
+                ctx.set(State::SignInRequired, signin_detail(sso.as_ref()));
+            } else {
+                ctx.set(State::Down, format!("{reason}. Restarting in {remaining}s"));
+            }
             std::thread::sleep(Duration::from_secs(1));
         }
     }
@@ -404,6 +424,13 @@ fn run(cfg: MountConfig, mut ctx: Ctx, rclone: Option<PathBuf>, health_interval:
         s.pid = None;
     });
     log(format!("[{}] supervisor stopped", cfg.name));
+}
+
+fn signin_detail(sso: Option<&SsoProfile>) -> String {
+    match sso {
+        Some(p) => format!("AWS SSO session for profile '{}' has expired", p.profile),
+        None => "AWS SSO session has expired".into(),
+    }
 }
 
 /// Create the mount point, clean up leftovers from a previous run and make
@@ -470,6 +497,7 @@ fn terminate(child: &mut Child) {
 fn run_session(
     cfg: &MountConfig,
     inv: &Invocation,
+    sso: Option<&SsoProfile>,
     mount_point: &Path,
     ctx: &mut Ctx,
     health_interval: Duration,
@@ -530,6 +558,8 @@ fn run_session(
     // None until the first bucket check has completed.
     let mut reachable: Option<bool> = None;
     let mut health_detail = String::new();
+    let mut signin_needed = false;
+    let mut login_generation = LOGIN_GENERATION.load(Ordering::SeqCst);
 
     loop {
         if ctx.stopping() {
@@ -588,6 +618,13 @@ fn run_session(
                 }
             }
 
+            // A fresh sign-in: check right away rather than at the next interval.
+            let generation = LOGIN_GENERATION.load(Ordering::SeqCst);
+            if generation != login_generation {
+                login_generation = generation;
+                last_health = None;
+            }
+
             // Active reachability check against the bucket, off-thread.
             let due_every = if reachable == Some(false) {
                 health_interval.min(Duration::from_secs(10))
@@ -611,9 +648,11 @@ fn run_session(
                             Ok(_) => {
                                 reachable = Some(true);
                                 health_detail.clear();
+                                signin_needed = false;
                             }
                             Err(e) => {
                                 reachable = Some(false);
+                                signin_needed = sso.is_some_and(|p| e == sso::SESSION_EXPIRED || p.needs_login());
                                 health_detail = e;
                             }
                         }
@@ -633,6 +672,9 @@ fn run_session(
             });
             if reachable.is_none() {
                 ctx.set(State::Starting, "Mounted, checking bucket…");
+            } else if reachable == Some(false) && signin_needed {
+                let extra = if pending > 0 { format!(" · {pending} file(s) waiting to upload") } else { String::new() };
+                ctx.set(State::SignInRequired, format!("{}{extra}", signin_detail(sso)));
             } else if reachable == Some(false) {
                 let extra = if pending > 0 { format!(" · {pending} file(s) waiting to upload") } else { String::new() };
                 ctx.set(State::Disconnected, format!("Bucket unreachable: {health_detail}{extra}"));

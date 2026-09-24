@@ -2,7 +2,7 @@ name: Release
 
 # Builds a universal BucketMount.app (rclone bundled) with the Tauri bundler
 # and attaches the zip and dmg to a GitHub release. Trigger by pushing a tag
-# like v0.2.0, or run manually.
+# like v0.1.0, or run manually.
 on:
   push:
     tags: ["v*"]
@@ -39,7 +39,13 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: OUT="$PWD/dist" scripts/build-app.sh
+        # Unset secrets arrive as empty strings; drop them so the bundler
+        # does not try to sign with an empty certificate.
+        run: |
+          for v in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
+            [ -n "${!v}" ] || unset "$v"
+          done
+          OUT="$PWD/dist" scripts/build-app.sh
 
       - uses: actions/upload-artifact@v4
         with:

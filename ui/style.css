@@ -189,3 +189,14 @@ pre.log .err { color: #ff6b6b; }
 .hidden { display: none !important; }
 .spinner { width: 14px; height: 14px; border: 2px solid var(--field-border); border-top-color: var(--accent); border-radius: 50%; display: inline-block; animation: spin 0.8s linear infinite; vertical-align: -3px; }
 @keyframes spin { to { transform: rotate(360deg); } }
+
+/* AWS SSO sign-in waiting strip */
+.signin-banner {
+  position: fixed; left: 16px; right: 16px; bottom: 16px; z-index: 15;
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 14px; border-radius: 10px;
+  background: var(--card); border: 1px solid var(--accent); box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+}
+.signin-banner .grow { flex: 1; min-width: 0; }
+.signin-banner .code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: 0.05em; }
+body.has-signin main { padding-bottom: 90px; }

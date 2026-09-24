@@ -7,7 +7,7 @@
 #
 # Environment overrides:
 #   ARCHS            "universal" (default) or "native" for a quick build of the current architecture
-#   RCLONE_VERSION   rclone release to bundle (default pinned below)
+#   RCLONE_VERSION   rclone release to bundle (default pinned in scripts/fetch-rclone.sh)
 #   OUT              output directory (default <build dir>/dist)
 #   APPLE_SIGNING_IDENTITY, APPLE_CERTIFICATE, APPLE_CERTIFICATE_PASSWORD,
 #   APPLE_ID, APPLE_PASSWORD, APPLE_TEAM_ID
@@ -17,7 +17,6 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 ARCHS="${ARCHS:-universal}"
-RCLONE_VERSION="${RCLONE_VERSION:-v1.75.1}"
 VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' "$ROOT/Cargo.toml" | head -1)"
 
 command -v cargo-tauri >/dev/null || { echo "Tauri CLI missing: cargo install tauri-cli --version '^2' --locked" >&2; exit 1; }
@@ -45,27 +44,9 @@ case "$ARCHS" in
   *) echo "ARCHS must be 'universal' or 'native'" >&2; exit 1 ;;
 esac
 
-echo "==> Fetching rclone $RCLONE_VERSION for: $TARGETS"
-mkdir -p "$SRC/binaries"
-for t in $TARGETS; do
-  case "$t" in
-    aarch64-apple-darwin) r_arch=osx-arm64 ;;
-    x86_64-apple-darwin)  r_arch=osx-amd64 ;;
-    *) echo "unknown target $t" >&2; exit 1 ;;
-  esac
-  dest="$SRC/binaries/rclone-$t"
-  if [[ -x "$dest" ]] && "$dest" version 2>/dev/null | head -1 | grep -q "rclone $RCLONE_VERSION"; then
-    echo "    $dest already present"
-    continue
-  fi
-  tmp="$(mktemp -d)"
-  curl -fsSL "https://downloads.rclone.org/$RCLONE_VERSION/rclone-$RCLONE_VERSION-$r_arch.zip" -o "$tmp/rclone.zip"
-  unzip -q -o "$tmp/rclone.zip" -d "$tmp/x"
-  cp "$(find "$tmp/x" -type f -name rclone | head -1)" "$dest"
-  chmod +x "$dest"
-  rm -rf "$tmp"
-  rustup target add "$t" >/dev/null 2>&1 || true
-done
+echo "==> Fetching rclone for: $TARGETS"
+"$SRC/scripts/fetch-rclone.sh" $TARGETS $TAURI_TARGET
+for t in $TARGETS; do rustup target add "$t" >/dev/null 2>&1 || true; done
 
 echo "==> Building BucketMount $VERSION ($ARCHS)"
 cd "$SRC"

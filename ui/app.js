@@ -29,9 +29,41 @@ async function refresh() {
 
 function render() {
   if (!snap) return;
+  renderSignInBanner();
   if (view.kind === "list") renderList();
   else renderEditorStatus();
   renderModal();
+}
+
+// ------------------------------------------------------------------ AWS SSO sign-in
+
+async function signIn(mount) {
+  try { await invoke("sso_login", { mount }); }
+  catch (err) { toast(String(err), true); }
+}
+
+// A fixed strip shown on every view while a sign-in waits for the browser.
+function renderSignInBanner() {
+  let el = document.getElementById("signin");
+  const l = snap.sso_login;
+  document.body.classList.toggle("has-signin", !!l);
+  if (!l) { if (el) el.remove(); return; }
+  if (!el) {
+    el = document.createElement("div");
+    el.id = "signin";
+    el.className = "signin-banner";
+    document.body.appendChild(el);
+  }
+  el.innerHTML = l.user_code
+    ? `<span class="spinner"></span><span class="grow">Approve the sign-in for AWS profile <b>${esc(l.profile)}</b> in your browser. Check that it shows code <b class="code">${esc(l.user_code)}</b>.</span>
+       <button class="btn btn-sm" id="signin-open">Open page again</button><button class="btn btn-sm" id="signin-cancel">Cancel</button>`
+    : `<span class="spinner"></span><span class="grow">Starting AWS sign-in for profile <b>${esc(l.profile)}</b>…</span><button class="btn btn-sm" id="signin-cancel">Cancel</button>`;
+  const open = el.querySelector("#signin-open");
+  if (open) open.onclick = () => {
+    const m = snap.mounts.find((x) => x.sso_profile === l.profile);
+    if (m) signIn(m.config);
+  };
+  el.querySelector("#signin-cancel").onclick = () => invoke("cancel_sso_login");
 }
 
 // ------------------------------------------------------------------ list
@@ -40,7 +72,7 @@ function summaryText() {
   const active = snap.mounts.filter((m) => m.state !== "disabled");
   if (!snap.mounts.length) return "No mounts configured";
   if (!active.length) return "All mounts disabled";
-  const problems = active.filter((m) => ["disconnected", "down", "error"].includes(m.state)).length;
+  const problems = active.filter((m) => ["disconnected", "sign_in_required", "down", "error"].includes(m.state)).length;
   if (problems) return `${problems} of ${active.length} mount${active.length > 1 ? "s" : ""} need attention`;
   if (active.some((m) => m.state === "syncing")) return "Syncing";
   if (active.some((m) => m.state === "starting")) return "Mounting…";
@@ -49,7 +81,7 @@ function summaryText() {
 
 function renderList() {
   const cards = snap.mounts.map((m) => {
-    const problem = ["disconnected", "down", "error"].includes(m.state);
+    const problem = ["disconnected", "sign_in_required", "down", "error"].includes(m.state);
     const detail = m.detail && m.detail !== m.state_label ? `<div class="detail ${problem ? "problem" : ""}">${esc(m.detail)}${m.restarts ? ` <span class="tiny">· ${m.restarts} restart${m.restarts > 1 ? "s" : ""}</span>` : ""}</div>` : "";
     const path = m.config.prefix ? `${m.config.bucket}/${m.config.prefix}` : m.config.bucket;
     return `
@@ -61,6 +93,7 @@ function renderList() {
           ${detail}
         </div>
         <div class="actions">
+          ${m.state === "sign_in_required" ? `<button class="btn btn-primary" data-signin="${esc(m.config.name)}">Sign in</button>` : ""}
           <button class="btn" data-open="${esc(m.config.name)}" ${m.mounted ? "" : "disabled"}>Open</button>
           <button class="btn" data-edit="${esc(m.config.name)}">Edit</button>
         </div>
@@ -96,6 +129,10 @@ function renderList() {
   $app.querySelector("#add").onclick = () => openEditor(null);
   $app.querySelectorAll("[data-open]").forEach((b) => (b.onclick = () => invoke("open_mount", { name: b.dataset.open })));
   $app.querySelectorAll("[data-edit]").forEach((b) => (b.onclick = () => openEditor(b.dataset.edit)));
+  $app.querySelectorAll("[data-signin]").forEach((b) => (b.onclick = () => {
+    const m = snap.mounts.find((x) => x.config.name === b.dataset.signin);
+    if (m) signIn(m.config);
+  }));
   $app.querySelector("#login").onchange = async (e) => {
     try { await invoke("set_start_at_login", { enabled: e.target.checked }); }
     catch (err) { toast(String(err), true); e.target.checked = !e.target.checked; }
@@ -117,7 +154,7 @@ function newMount() {
   return {
     name: "", bucket: "", prefix: "", mount_point: "", enabled: true, read_only: false,
     provider: "AWS", region: "us-east-1", endpoint: "", access_key_id: "", secret_access_key: "",
-    rclone_remote: "", env_auth: false, write_back_secs: 5, dir_cache_secs: 60, cache_max_size: "10G", extra_args: [],
+    rclone_remote: "", env_auth: false, aws_profile: "", write_back_secs: 5, dir_cache_secs: 60, cache_max_size: "10G", extra_args: [],
   };
 }
 
@@ -142,7 +179,8 @@ function renderEditor() {
     keys: `${field("access_key_id", "Access key ID", d.access_key_id)}
            <label for="secret">Secret access key</label>
            <div class="inline"><input id="secret" type="password" value="${esc(d.secret_access_key)}" spellcheck="false"><button class="btn btn-sm" id="toggle-secret" type="button">Show</button></div>`,
-    env: `<div class="full hint tiny">Uses AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY, ~/.aws/credentials (AWS_PROFILE), SSO or an instance role.</div>`,
+    env: `${field("aws_profile", "AWS profile", d.aws_profile, { placeholder: "default" })}
+          <div class="full hint tiny">A profile from ~/.aws/config or ~/.aws/credentials. For SSO profiles BucketMount signs you in when the session expires. Leave empty for the default profile, environment variables or an instance role.</div>`,
     remote: `${field("rclone_remote", "Remote name", d.rclone_remote, { placeholder: "s3" })}
              <div class="full hint tiny">A remote from ~/.config/rclone/rclone.conf. Provider, region and endpoint above are ignored.</div>`,
   }[v.cred];
@@ -243,7 +281,9 @@ function renderEditor() {
       d.access_key_id = ""; d.secret_access_key = ""; d.env_auth = false;
     } else {
       d.access_key_id = ""; d.secret_access_key = ""; d.rclone_remote = ""; d.env_auth = true;
+      d.aws_profile = g("aws_profile").value.trim();
     }
+    if (v.cred === "keys") d.aws_profile = "";
     return d;
   };
 
@@ -279,6 +319,13 @@ function renderEditor() {
       r.className = "test-result ok"; r.textContent = `✓ Bucket reachable (${n} top-level entr${n === 1 ? "y" : "ies"})`;
     } catch (err) {
       r.className = "test-result bad"; r.textContent = `✕ ${err}`;
+      if (String(err).includes("SSO session expired")) {
+        const b = document.createElement("button");
+        b.className = "btn btn-sm btn-primary"; b.textContent = "Sign in"; b.style.marginLeft = "8px";
+        const draft = read();
+        b.onclick = () => signIn(draft);
+        r.appendChild(b);
+      }
     }
     q("#test").disabled = false;
   };
@@ -311,10 +358,13 @@ async function renderEditorStatus() {
   panel.innerHTML = `
     <div class="head"><span class="dot" style="background:${m.color}"></span><span class="state" style="color:${m.color}">${esc(m.state_label)}</span>${m.detail !== m.state_label ? `<span class="subtle">${esc(m.detail)}</span>` : ""}</div>
     <div class="facts">${facts.map((f) => `<span class="tiny">${esc(f)}</span>`).join("")}
-      <button class="btn btn-sm" id="restart">Restart mount</button><button class="btn btn-sm" id="showlog">Show log file</button></div>
+      <button class="btn btn-sm" id="restart">Restart mount</button><button class="btn btn-sm" id="showlog">Show log file</button>
+      ${m.sso_profile ? `<button class="btn btn-sm" id="panel-signin">Sign in to AWS (${esc(m.sso_profile)})…</button>` : ""}</div>
     <pre class="log">${log || '<span class="tiny">No log output yet.</span>'}</pre>`;
   panel.querySelector("#restart").onclick = () => { invoke("restart_mount", { name: m.config.name }); toast("Restarting…"); };
   panel.querySelector("#showlog").onclick = () => invoke("show_log", { name: m.config.name });
+  const ps = panel.querySelector("#panel-signin");
+  if (ps) ps.onclick = () => signIn(m.config);
   const pre = panel.querySelector("pre");
   if (wasAtBottom) pre.scrollTop = pre.scrollHeight;
 }
@@ -348,5 +398,7 @@ document.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && view.kind === "edit") { view = { kind: "list" }; render(); }
 });
 listen("state-changed", refresh);
+listen("toast", (e) => toast(e.payload));
+listen("toast-error", (e) => toast(e.payload, true));
 listen("edit-mount", (e) => { if (snap) openEditor(e.payload); });
 refresh();

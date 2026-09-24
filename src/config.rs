@@ -68,6 +68,10 @@ pub struct MountConfig {
     pub rclone_remote: String,
     /// Let the AWS SDK find credentials (env vars, ~/.aws/credentials, IAM).
     pub env_auth: bool,
+    /// AWS profile from ~/.aws/config for the default chain (or to override
+    /// the rclone remote's). SSO profiles are signed in to by the app.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub aws_profile: String,
 
     /// Seconds a written file sits in the local cache before it is uploaded.
     pub write_back_secs: u64,
@@ -97,6 +101,7 @@ impl Default for MountConfig {
             secret_access_key: String::new(),
             rclone_remote: String::new(),
             env_auth: false,
+            aws_profile: String::new(),
             write_back_secs: 5,
             dir_cache_secs: 60,
             cache_max_size: "10G".to_string(),

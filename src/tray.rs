@@ -25,6 +25,13 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
                         if let Some(m) = crate::app::lock_cfg(app).mounts.iter().find(|m| m.name == name) {
                             crate::mac::open_in_finder(&m.mount_path());
                         }
+                    } else if let Some(name) = id.strip_prefix("login:") {
+                        show_window(app);
+                        if let Some(m) = crate::app::lock_cfg(app).mounts.iter().find(|m| m.name == name) {
+                            if let Err(e) = crate::app::start_sso_login(app, m) {
+                                crate::mac::notify("BucketMount", &e);
+                            }
+                        }
                     } else if let Some(name) = id.strip_prefix("edit:") {
                         show_window(app);
                         let _ = app.emit("edit-mount", name.to_string());
@@ -63,6 +70,9 @@ fn apply(app: &AppHandle, snap: &Snapshot) -> tauri::Result<()> {
         if !m.detail.is_empty() && m.detail != m.state_label {
             let d = truncate(&m.detail, 70);
             menu.append(&MenuItem::with_id(app, format!("det:{}", m.config.name), format!("      {d}"), false, None::<&str>)?)?;
+        }
+        if m.state == State::SignInRequired {
+            menu.append(&MenuItem::with_id(app, format!("login:{}", m.config.name), "      Sign in to AWS…", true, None::<&str>)?)?;
         }
         menu.append(&MenuItem::with_id(app, format!("open:{}", m.config.name), "      Open in Finder", m.mounted, None::<&str>)?)?;
         menu.append(&MenuItem::with_id(app, format!("edit:{}", m.config.name), "      Settings…", true, None::<&str>)?)?;
