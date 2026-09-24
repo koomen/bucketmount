@@ -182,7 +182,9 @@ function renderEditor() {
     env: `${field("aws_profile", "AWS profile", d.aws_profile, { placeholder: "default" })}
           <div class="full hint tiny">A profile from ~/.aws/config or ~/.aws/credentials. For SSO profiles BucketMount signs you in when the session expires. Leave empty for the default profile, environment variables or an instance role.</div>`,
     remote: `${field("rclone_remote", "Remote name", d.rclone_remote, { placeholder: "s3" })}
-             <div class="full hint tiny">A remote from ~/.config/rclone/rclone.conf. Provider, region and endpoint above are ignored.</div>`,
+             <div class="full hint tiny">A remote from ~/.config/rclone/rclone.conf. Provider, region and endpoint above are ignored.</div>
+             ${field("aws_profile", "AWS profile", d.aws_profile, { placeholder: "from the remote" })}
+             <div class="full hint tiny">Optional: overrides the remote's profile. For SSO profiles BucketMount signs you in when the session expires.</div>`,
   }[v.cred];
 
   $app.innerHTML = `
@@ -272,19 +274,26 @@ function renderEditor() {
     d.dir_cache_secs = Math.max(1, parseInt(g("dir_cache_secs").value || "60", 10));
     d.cache_max_size = g("cache_max_size").value || "10G";
     d.extra_args = g("extra_args").value.split(/\s+/).filter(Boolean);
+    // Only pick up the visible credential fields: values typed under the
+    // other sources survive switching back and forth until save.
     if (v.cred === "keys") {
       d.access_key_id = g("access_key_id").value;
       d.secret_access_key = g("secret").value;
-      d.rclone_remote = ""; d.env_auth = false;
-    } else if (v.cred === "remote") {
-      d.rclone_remote = g("rclone_remote").value;
-      d.access_key_id = ""; d.secret_access_key = ""; d.env_auth = false;
     } else {
-      d.access_key_id = ""; d.secret_access_key = ""; d.rclone_remote = ""; d.env_auth = true;
+      if (v.cred === "remote") d.rclone_remote = g("rclone_remote").value;
       d.aws_profile = g("aws_profile").value.trim();
     }
-    if (v.cred === "keys") d.aws_profile = "";
     return d;
+  };
+
+  // The mount as it will be saved or tested: only the chosen source's fields.
+  const forSave = () => {
+    const m = structuredClone(read());
+    if (v.cred !== "keys") { m.access_key_id = ""; m.secret_access_key = ""; }
+    if (v.cred !== "remote") m.rclone_remote = "";
+    if (v.cred === "keys") m.aws_profile = "";
+    m.env_auth = v.cred === "env";
+    return m;
   };
 
   const q = (sel) => $app.querySelector(sel);
@@ -301,7 +310,7 @@ function renderEditor() {
 
   q("#save").onclick = async () => {
     try {
-      await invoke("save_mount", { mount: read(), originalName: v.original });
+      await invoke("save_mount", { mount: forSave(), originalName: v.original });
       view = { kind: "list" };
       toast("Saved");
       await refresh();
@@ -315,14 +324,14 @@ function renderEditor() {
     q("#test").disabled = true;
     r.className = "test-result"; r.innerHTML = `<span class="spinner"></span> Checking…`;
     try {
-      const n = await invoke("test_connection", { mount: read() });
+      const n = await invoke("test_connection", { mount: forSave() });
       r.className = "test-result ok"; r.textContent = `✓ Bucket reachable (${n} top-level entr${n === 1 ? "y" : "ies"})`;
     } catch (err) {
       r.className = "test-result bad"; r.textContent = `✕ ${err}`;
       if (String(err).includes("SSO session expired")) {
         const b = document.createElement("button");
         b.className = "btn btn-sm btn-primary"; b.textContent = "Sign in"; b.style.marginLeft = "8px";
-        const draft = read();
+        const draft = forSave();
         b.onclick = () => signIn(draft);
         r.appendChild(b);
       }
