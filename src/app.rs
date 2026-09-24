@@ -110,6 +110,15 @@ impl AppState {
         }
     }
 
+    /// Some mount is uploading, starting up or running a sync right now.
+    pub fn busy(&self) -> bool {
+        let cfg = lock(&self.cfg).clone();
+        lock(&self.manager).statuses(&cfg).iter().any(|(m, s)| {
+            matches!(s.state, supervisor::State::Syncing | supervisor::State::Starting)
+                || (m.mode == config::Mode::Sync && s.pid.is_some())
+        })
+    }
+
     /// Persist the config and reconcile supervisors with it.
     fn commit(&self, app: &AppHandle) -> Result<(), String> {
         if let Some(e) = lock(&self.config_error).as_ref() {

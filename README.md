@@ -44,7 +44,7 @@ and do not support read-only mode.
 ## Install
 
 Every tagged version (`v0.1.0`, …) is built by GitHub Actions and published on
-the [Releases](https://github.com/koomen/bucketsync/releases) page as a
+the [Releases](https://github.com/koomen/bucketmount/releases) page as a
 universal (Apple silicon + Intel) `.dmg` and `.zip`.
 
 **From the Releases page:** download `BucketMount_<version>_universal.dmg`,
@@ -54,7 +54,7 @@ open it and drag **BucketMount.app** to `/Applications`.
 
 ```sh
 tmp="$(mktemp -d)"
-gh release download --repo koomen/bucketsync --pattern 'BucketMount-*.zip' --dir "$tmp"
+gh release download --repo koomen/bucketmount --pattern 'BucketMount-*.zip' --dir "$tmp"
 osascript -e 'quit app "BucketMount"' 2>/dev/null || true   # when upgrading
 rm -rf /Applications/BucketMount.app
 ditto -x -k "$tmp"/BucketMount-*.zip /Applications
@@ -62,6 +62,20 @@ open /Applications/BucketMount.app
 ```
 
 **From source:** see [Building from source](#building-from-source).
+
+### Updates
+
+From 0.3.0 on, BucketMount updates itself. About a minute after launch and
+then every four hours it checks the latest release; a newer build is
+downloaded in the background, installed once no mount is uploading or
+syncing, and the app relaunches into it with a notification. **Check for
+Updates…** in the menu bar menu checks right away.
+
+Updates are signed with the key in the `TAURI_SIGNING_PRIVATE_KEY` repository
+secret, and the app refuses anything not signed with it (the public half is
+`plugins.updater.pubkey` in `tauri.conf.json`). If that key is ever lost,
+generate a new pair with `cargo tauri signer generate`, update the secret and
+the public key, and reinstall the app by hand once.
 
 Then:
 
@@ -181,7 +195,7 @@ Requires Rust (stable), Xcode command line tools and the Tauri CLI
 in `ui/` is plain HTML, CSS and JavaScript loaded straight by the WebView.
 
 ```sh
-git clone git@github.com:koomen/bucketsync.git && cd bucketsync
+git clone git@github.com:koomen/bucketmount.git && cd bucketmount
 scripts/build-app.sh                 # universal .app + .dmg + .zip with rclone bundled -> dist/
 ARCHS=native scripts/build-app.sh    # quicker, current architecture only
 cargo tauri dev                      # run with live-reloading front end

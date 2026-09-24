@@ -11,6 +11,7 @@ mod sso;
 mod supervisor;
 mod sync;
 mod tray;
+mod updater;
 
 use app::AppState;
 use config::Config;
@@ -26,7 +27,16 @@ extern "C" fn on_signal(_sig: libc::c_int) {
 fn main() {
     let background = std::env::args().any(|a| a == "--background");
 
-    let Some(_instance_lock) = mac::acquire_instance_lock() else {
+    // After a self-update the old process may still be shutting down.
+    let relaunched = std::env::var_os(updater::RELAUNCH_ENV).is_some();
+    std::env::remove_var(updater::RELAUNCH_ENV);
+    let mut instance_lock = mac::acquire_instance_lock();
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    while instance_lock.is_none() && relaunched && std::time::Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(250));
+        instance_lock = mac::acquire_instance_lock();
+    }
+    let Some(_instance_lock) = instance_lock else {
         eprintln!("{} is already running; use the menu bar icon.", config::APP_NAME);
         return;
     };
@@ -75,6 +85,7 @@ fn main() {
     };
 
     let tauri_app = tauri::Builder::default()
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(state)
         .invoke_handler(tauri::generate_handler![
             app::snapshot,
@@ -104,6 +115,7 @@ fn main() {
         .setup(move |app| {
             let handle = app.handle().clone();
             tray::create(&handle)?;
+            updater::start(&handle);
 
             // Start the supervisors now that the tray exists to show them.
             {

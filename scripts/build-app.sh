@@ -13,6 +13,10 @@
 #   APPLE_ID, APPLE_PASSWORD, APPLE_TEAM_ID
 #                    picked up by the Tauri bundler for Developer ID signing + notarization.
 #                    Without them the app is ad-hoc signed.
+#   TAURI_SIGNING_PRIVATE_KEY (or TAURI_SIGNING_PRIVATE_KEY_PATH), TAURI_SIGNING_PRIVATE_KEY_PASSWORD
+#                    sign the self-update bundle. With them the build also produces
+#                    BucketMount.app.tar.gz, its .sig and latest.json for the in-app updater.
+#   GITHUB_REPOSITORY  owner/repo the update URLs point at (default koomen/bucketmount)
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -68,5 +72,24 @@ rm -rf "$OUT/BucketMount.app" "$OUT"/BucketMount*.dmg "$OUT"/BucketMount*.zip
 ditto "$APP" "$OUT/BucketMount.app"
 cp "$BUNDLE_DIR"/dmg/*.dmg "$OUT/" 2>/dev/null || echo "    (no dmg produced)"
 ditto -c -k --keepParent "$OUT/BucketMount.app" "$OUT/BucketMount-$VERSION.zip"
+
+rm -f "$OUT"/BucketMount.app.tar.gz* "$OUT/latest.json"
+if [[ -n "${TAURI_SIGNING_PRIVATE_KEY:-}${TAURI_SIGNING_PRIVATE_KEY_PATH:-}" ]]; then
+  echo "==> Signing the update bundle"
+  tar -czf "$OUT/BucketMount.app.tar.gz" -C "$OUT" BucketMount.app
+  cargo tauri signer sign "$OUT/BucketMount.app.tar.gz" >/dev/null
+  URL="https://github.com/${GITHUB_REPOSITORY:-koomen/bucketmount}/releases/download/v$VERSION/BucketMount.app.tar.gz"
+  # The universal bundle serves both architectures.
+  VERSION="$VERSION" URL="$URL" SIG="$(cat "$OUT/BucketMount.app.tar.gz.sig")" /usr/bin/python3 -c '
+import datetime, json, os
+entry = {"signature": os.environ["SIG"], "url": os.environ["URL"]}
+print(json.dumps({
+    "version": os.environ["VERSION"],
+    "pub_date": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    "platforms": {"darwin-aarch64": entry, "darwin-x86_64": entry},
+}, indent=2))' > "$OUT/latest.json"
+else
+  echo "==> TAURI_SIGNING_PRIVATE_KEY not set; skipping the self-update bundle"
+fi
 ls -la "$OUT"
 echo "Done: $OUT/BucketMount.app"

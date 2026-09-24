@@ -1,6 +1,6 @@
 [package]
 name = "bucketmount"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 description = "Mount S3 buckets as macOS volumes, kept alive and monitored from the menu bar"
 license = "MIT"
@@ -19,6 +19,7 @@ ureq = { version = "2", features = ["json"] }
 sha1_smol = "1.0.1"
 time = { version = "0.3", features = ["formatting", "parsing"] }
 notify = "8"
+tauri-plugin-updater = "2"
 
 [profile.release]
 opt-level = 2

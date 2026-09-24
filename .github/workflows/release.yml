@@ -39,10 +39,12 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         # Unset secrets arrive as empty strings; drop them so the bundler
         # does not try to sign with an empty certificate.
         run: |
-          for v in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
+          for v in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID TAURI_SIGNING_PRIVATE_KEY TAURI_SIGNING_PRIVATE_KEY_PASSWORD; do
             [ -n "${!v}" ] || unset "$v"
           done
           OUT="$PWD/dist" scripts/build-app.sh
@@ -53,9 +55,16 @@ jobs:
           path: |
             dist/BucketMount-*.zip
             dist/*.dmg
+            dist/BucketMount.app.tar.gz*
+            dist/latest.json
 
       - name: Publish release
         if: startsWith(github.ref, 'refs/tags/')
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" dist/BucketMount-*.zip dist/*.dmg --generate-notes --title "BucketMount $GITHUB_REF_NAME"
+        # latest.json is what installed copies poll for updates; without it
+        # (no signing key) the release is download-only.
+        run: |
+          shopt -s nullglob
+          gh release create "$GITHUB_REF_NAME" dist/BucketMount-*.zip dist/*.dmg dist/BucketMount.app.tar.gz* dist/latest.jso[n] \
+            --generate-notes --title "BucketMount $GITHUB_REF_NAME"

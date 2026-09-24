@@ -26,6 +26,7 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
             let id = event.id().as_ref();
             match id {
                 "open" => show_window(app),
+                "check-updates" => crate::updater::check_now(),
                 "quit" => app.exit(0),
                 _ => {
                     if let Some(name) = id.strip_prefix("open:") {
@@ -97,6 +98,7 @@ fn apply(app: &AppHandle, snap: &Snapshot) -> tauri::Result<()> {
         menu.append(&PredefinedMenuItem::separator(app)?)?;
     }
     menu.append(&MenuItem::with_id(app, "open", "Open BucketMount", true, None::<&str>)?)?;
+    menu.append(&MenuItem::with_id(app, "check-updates", "Check for Updates…", true, None::<&str>)?)?;
     menu.append(&MenuItem::with_id(app, "quit", "Quit BucketMount", true, None::<&str>)?)?;
     tray.set_menu(Some(menu))?;
 
