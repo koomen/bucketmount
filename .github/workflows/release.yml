@@ -24,9 +24,17 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
+      # The prebuilt binary from Tauri's release; compiling it takes ~11 minutes.
       - name: Install Tauri CLI
-        uses: cargo-bins/cargo-binstall@main
-      - run: cargo binstall tauri-cli@^2 -y --locked
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAURI_CLI_VERSION: 2.11.5
+        run: |
+          gh release download "tauri-cli-v$TAURI_CLI_VERSION" --repo tauri-apps/tauri \
+            --pattern 'cargo-tauri-aarch64-apple-darwin.zip' --dir "$RUNNER_TEMP"
+          unzip -o -q "$RUNNER_TEMP/cargo-tauri-aarch64-apple-darwin.zip" cargo-tauri -d "$HOME/.cargo/bin"
+          chmod +x "$HOME/.cargo/bin/cargo-tauri"
+          cargo tauri --version
 
       # Optional Developer ID signing + notarization: the Tauri bundler reads
       # these variables. Without the secrets the app is ad-hoc signed and users
