@@ -131,6 +131,16 @@ pub fn reveal_in_finder(path: &Path) {
     let _ = Command::new("/usr/bin/open").arg("-R").arg(path).spawn();
 }
 
+/// Whether the system appearance is Dark (so the menu bar wants light glyphs).
+pub fn dark_mode() -> bool {
+    Command::new("/usr/bin/defaults")
+        .args(["read", "-g", "AppleInterfaceStyle"])
+        .stderr(Stdio::null())
+        .output()
+        .map(|o| o.status.success() && String::from_utf8_lossy(&o.stdout).trim().eq_ignore_ascii_case("dark"))
+        .unwrap_or(false)
+}
+
 /// User-visible macOS notification.
 pub fn notify(title: &str, body: &str) {
     let esc = |s: &str| s.replace('\\', "\\\\").replace('"', "\\\"");
