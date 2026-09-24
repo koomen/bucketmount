@@ -152,6 +152,49 @@ pub fn mount_args(m: &MountConfig, inv: &Invocation, mount_point: &Path, rc_port
     args
 }
 
+/// Files that never belong in a synced bucket: Finder metadata, AppleDouble
+/// files left behind by the mount, editor swap files.
+pub const SYNC_EXCLUDES: &[&str] = &[".DS_Store", "._*", ".*.swp", ".*.swx", ".~lock.*#"];
+
+/// Arguments for one `rclone bisync` run between `folder` and the bucket.
+/// `resync` rebuilds bisync's state from scratch, merging both sides and
+/// keeping the newer copy of any file that differs.
+pub fn bisync_args(m: &MountConfig, inv: &Invocation, folder: &Path, workdir: &Path, resync: bool) -> Vec<String> {
+    let mut args: Vec<String> = vec![
+        "bisync".into(),
+        folder.to_string_lossy().to_string(),
+        inv.remote.clone(),
+        "--workdir".into(),
+        workdir.to_string_lossy().to_string(),
+        // Retry after interruptions and minor errors instead of demanding a resync.
+        "--resilient".into(),
+        "--recover".into(),
+        "--max-lock".into(),
+        "2m".into(),
+        // Files changed on both sides are kept as name.conflict1 / name.conflict2.
+        "--conflict-resolve".into(),
+        "none".into(),
+        "--contimeout".into(),
+        "10s".into(),
+        "--timeout".into(),
+        "60s".into(),
+        "--log-level".into(),
+        "INFO".into(),
+        "--use-json-log=false".into(),
+    ];
+    for pat in SYNC_EXCLUDES {
+        args.push("--exclude".into());
+        args.push((*pat).into());
+    }
+    if resync {
+        args.push("--resync".into());
+        args.push("--resync-mode".into());
+        args.push("newer".into());
+    }
+    args.extend(m.extra_args.iter().cloned());
+    args
+}
+
 pub fn sanitize(name: &str) -> String {
     name.trim()
         .chars()

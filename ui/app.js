@@ -75,7 +75,7 @@ function summaryText() {
   const problems = active.filter((m) => ["disconnected", "sign_in_required", "down", "error"].includes(m.state)).length;
   if (problems) return `${problems} of ${active.length} mount${active.length > 1 ? "s" : ""} need attention`;
   if (active.some((m) => m.state === "syncing")) return "Syncing";
-  if (active.some((m) => m.state === "starting")) return "Mounting…";
+  if (active.some((m) => m.state === "starting")) return "Starting…";
   return `${active.length} mount${active.length > 1 ? "s" : ""} connected`;
 }
 
@@ -152,7 +152,7 @@ function credModeOf(m) {
 
 function newMount() {
   return {
-    name: "", bucket: "", prefix: "", mount_point: "", enabled: true, read_only: false,
+    name: "", mode: "sync", bucket: "", prefix: "", mount_point: "", enabled: true, read_only: false,
     provider: "AWS", region: "us-east-1", endpoint: "", access_key_id: "", secret_access_key: "",
     rclone_remote: "", env_auth: false, aws_profile: "", write_back_secs: 5, dir_cache_secs: 60, cache_max_size: "10G", extra_args: [],
   };
@@ -175,6 +175,7 @@ function renderEditor() {
   const v = view;
   const d = v.draft;
   const isNew = v.original === null;
+  const sync = d.mode === "sync";
   const credFields = {
     keys: `${field("access_key_id", "Access key ID", d.access_key_id)}
            <label for="secret">Secret access key</label>
@@ -195,12 +196,22 @@ function renderEditor() {
 
     <h2>Bucket</h2>
     <div class="form">
+      <label>Mode</label>
+      <div class="segmented" id="mode">
+        <button type="button" data-mode="sync" class="${sync ? "active" : ""}">Synced folder</button>
+        <button type="button" data-mode="mount" class="${sync ? "" : "active"}">Mount</button>
+      </div>
+      <div class="full hint tiny">${sync
+        ? "A normal folder on this Mac, kept in two-way sync with the bucket. Works offline and behaves like any local folder; needs disk space for the whole bucket."
+        : "The bucket as a network volume. Files are downloaded when opened, so it needs no disk space, but every save goes over the network."}</div>
       ${field("name", "Name", d.name, { placeholder: "my-bucket" })}
-      <div class="full hint tiny">Shown as the volume name. Must be unique.</div>
+      <div class="full hint tiny">${sync ? "Must be unique." : "Shown as the volume name. Must be unique."}</div>
       ${field("bucket", "Bucket", d.bucket, { placeholder: "bucket-name" })}
       ${field("prefix", "Path in bucket", d.prefix, { placeholder: "optional/sub/folder" })}
-      ${field("mount_point", "Mount point", d.mount_point, { placeholder: "~/BucketMount/name" })}
-      <div class="full hint tiny">An empty folder. While mounted it appears in the Finder sidebar under Locations.</div>
+      ${field("mount_point", sync ? "Local folder" : "Mount point", d.mount_point, { placeholder: "~/BucketMount/name" })}
+      <div class="full hint tiny">${sync
+        ? "Created if missing. Files already in it are merged with the bucket on the first sync."
+        : "An empty folder. While mounted it appears in the Finder sidebar under Locations."}</div>
     </div>
 
     <h2>Connection</h2>
@@ -228,8 +239,8 @@ function renderEditor() {
     <div class="form">
       <label>Behaviour</label>
       <div class="checks">
-        <label><input type="checkbox" id="enabled" ${d.enabled ? "checked" : ""}> Enabled (mount automatically)</label>
-        <label><input type="checkbox" id="read_only" ${d.read_only ? "checked" : ""}> Read only</label>
+        <label><input type="checkbox" id="enabled" ${d.enabled ? "checked" : ""}> Enabled (${sync ? "sync" : "mount"} automatically)</label>
+        <label class="${sync ? "hidden" : ""}"><input type="checkbox" id="read_only" ${d.read_only && !sync ? "checked" : ""}> Read only</label>
       </div>
     </div>
 
@@ -237,11 +248,13 @@ function renderEditor() {
       <summary>Advanced</summary>
       <div class="form">
         <label for="write_back_secs">Upload delay</label>
-        <div class="inline"><input class="short" id="write_back_secs" type="number" min="1" max="600" value="${d.write_back_secs}"><span class="tiny">seconds after the last write before a file is uploaded</span></div>
-        <label for="dir_cache_secs">Listing cache</label>
-        <div class="inline"><input class="short" id="dir_cache_secs" type="number" min="1" max="3600" value="${d.dir_cache_secs}"><span class="tiny">seconds until changes made elsewhere appear</span></div>
-        <label for="cache_max_size">Local cache limit</label>
-        <div class="inline"><input class="short" id="cache_max_size" type="text" value="${esc(d.cache_max_size)}"><span class="tiny">e.g. 10G</span></div>
+        <div class="inline"><input class="short" id="write_back_secs" type="number" min="1" max="600" value="${d.write_back_secs}"><span class="tiny">${sync ? "seconds after the last local change before syncing" : "seconds after the last write before a file is uploaded"}</span></div>
+        <label for="dir_cache_secs">${sync ? "Bucket check" : "Listing cache"}</label>
+        <div class="inline"><input class="short" id="dir_cache_secs" type="number" min="1" max="3600" value="${d.dir_cache_secs}"><span class="tiny">${sync ? "seconds between checks for changes made elsewhere (min 10)" : "seconds until changes made elsewhere appear"}</span></div>
+        <div style="display:contents" class="${sync ? "hidden" : ""}">
+          <label for="cache_max_size">Local cache limit</label>
+          <div class="inline"><input class="short" id="cache_max_size" type="text" value="${esc(d.cache_max_size)}"><span class="tiny">e.g. 10G</span></div>
+        </div>
         ${field("extra_args", "Extra rclone flags", (d.extra_args || []).join(" "), { placeholder: "--transfers 8" })}
       </div>
     </details>
@@ -269,7 +282,7 @@ function renderEditor() {
     d.region = g("region").value;
     d.endpoint = g("endpoint") ? g("endpoint").value : d.endpoint;
     d.enabled = g("enabled").checked;
-    d.read_only = g("read_only").checked;
+    d.read_only = d.mode !== "sync" && g("read_only").checked;
     d.write_back_secs = Math.max(1, parseInt(g("write_back_secs").value || "5", 10));
     d.dir_cache_secs = Math.max(1, parseInt(g("dir_cache_secs").value || "60", 10));
     d.cache_max_size = g("cache_max_size").value || "10G";
@@ -304,6 +317,7 @@ function renderEditor() {
   q("#mount_point").oninput = () => { mountPointAuto = false; };
   if (mountPointAuto && !q("#mount_point").value && q("#name").value) q("#name").dispatchEvent(new Event("input"));
   q("#provider").onchange = (e) => { q("#endpoint-row").classList.toggle("hidden", e.target.value === "AWS"); };
+  q("#mode").querySelectorAll("button").forEach((b) => (b.onclick = () => { read(); d.mode = b.dataset.mode; renderEditor(); }));
   q("#cred").querySelectorAll("button").forEach((b) => (b.onclick = () => { read(); v.cred = b.dataset.cred; renderEditor(); }));
   const ts = q("#toggle-secret");
   if (ts) ts.onclick = () => { const s = q("#secret"); s.type = s.type === "password" ? "text" : "password"; ts.textContent = s.type === "password" ? "Show" : "Hide"; };
@@ -359,18 +373,22 @@ async function renderEditorStatus() {
   const log = lines.map((l) => `<span class="${/ ERROR /.test(l) ? "err" : ""}">${esc(l)}</span>`).join("\n");
   const facts = [
     m.pid ? `rclone pid ${m.pid}` : null,
+    m.config.mode === "sync" && m.last_ok_secs != null ? `last synced ${m.last_ok_secs}s ago` : null,
     `${m.restarts} restart${m.restarts === 1 ? "" : "s"}`,
-    m.last_ok_secs != null ? `last healthy ${m.last_ok_secs}s ago` : null,
+    m.config.mode !== "sync" && m.last_ok_secs != null ? `last healthy ${m.last_ok_secs}s ago` : null,
     m.uploads_pending ? `${m.uploads_pending} file(s) uploading` : null,
   ].filter(Boolean);
   const wasAtBottom = (() => { const p = panel.querySelector("pre"); return !p || p.scrollTop + p.clientHeight >= p.scrollHeight - 8; })();
   panel.innerHTML = `
     <div class="head"><span class="dot" style="background:${m.color}"></span><span class="state" style="color:${m.color}">${esc(m.state_label)}</span>${m.detail !== m.state_label ? `<span class="subtle">${esc(m.detail)}</span>` : ""}</div>
     <div class="facts">${facts.map((f) => `<span class="tiny">${esc(f)}</span>`).join("")}
-      <button class="btn btn-sm" id="restart">Restart mount</button><button class="btn btn-sm" id="showlog">Show log file</button>
+      <button class="btn btn-sm ${m.needs_resync ? "btn-primary" : ""}" id="restart">${m.needs_resync ? "Resync" : m.config.mode === "sync" ? "Sync now" : "Restart mount"}</button><button class="btn btn-sm" id="showlog">Show log file</button>
       ${m.sso_profile ? `<button class="btn btn-sm" id="panel-signin">Sign in to AWS (${esc(m.sso_profile)})…</button>` : ""}</div>
     <pre class="log">${log || '<span class="tiny">No log output yet.</span>'}</pre>`;
-  panel.querySelector("#restart").onclick = () => { invoke("restart_mount", { name: m.config.name }); toast("Restarting…"); };
+  panel.querySelector("#restart").onclick = () => {
+    invoke("restart_mount", { name: m.config.name });
+    toast(m.needs_resync ? "Resyncing…" : m.config.mode === "sync" ? "Syncing…" : "Restarting…");
+  };
   panel.querySelector("#showlog").onclick = () => invoke("show_log", { name: m.config.name });
   const ps = panel.querySelector("#panel-signin");
   if (ps) ps.onclick = () => signIn(m.config);

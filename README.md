@@ -6,8 +6,9 @@ them mounted, and tells you from the menu bar when the connection is lost.
 - Each bucket appears as a volume in Finder (under **Locations** in the
   sidebar). Files you save are uploaded within seconds; files others upload
   appear within a minute.
-- A menu bar dot shows the worst state of all mounts: green connected, blue
-  syncing, orange mounting, red disconnected/down, grey disabled.
+- A status dot on the menu bar bucket shows the worst state of all mounts:
+  green connected, blue syncing, orange mounting, red disconnected/down, grey
+  disabled.
 - The `rclone nfsmount` process behind each volume is babysat: if it dies,
   hangs, is ejected, or the bucket becomes unreachable, you get a
   notification and it is restarted with backoff. Nothing needs installing —
@@ -15,6 +16,30 @@ them mounted, and tells you from the menu bar when the connection is lost.
   (no kernel extensions, no macFUSE).
 - Everything is driven by one file, `~/.config/bucketmount/config.toml`.
   Copy it to a new Mac, launch the app, and your buckets come back.
+
+## Synced folders
+
+A bucket can also be set up as a **synced folder** instead of a mount
+(`mode = "sync"`, or **Synced folder** in the editor). The folder is an
+ordinary folder on your disk, so editors, git and file watchers behave exactly
+as they do anywhere else, and it works offline. BucketMount keeps it in
+two-way sync with the bucket using `rclone bisync`:
+
+- Local changes are synced `write_back_secs` (default 5) after the last change,
+  detected through FSEvents.
+- The bucket is checked for changes made elsewhere every `dir_cache_secs`
+  (default 60, minimum 10).
+- The first sync merges the folder and the bucket, keeping the newer copy of
+  any file that exists on both sides. After that, a file changed on both sides
+  between syncs is kept twice, as `name.conflict1` and `name.conflict2`.
+- `.DS_Store`, `._*` AppleDouble files and editor swap files are not synced.
+- If more than half the files would be deleted in one run, bisync stops and
+  asks you to check (see the mount's log).
+- If bisync ever loses track of its state, the folder shows an error with a
+  **Resync** button that merges both sides again.
+
+Synced folders need disk space for the whole bucket (or the prefix you choose)
+and do not support read-only mode.
 
 ## Install
 
@@ -79,6 +104,7 @@ start_at_login = true
 
 [[mount]]
 name = "photos"
+mode = "mount"                 # or "sync" for a synced local folder
 bucket = "my-photos-bucket"
 mount_point = "~/BucketMount/photos"
 region = "us-west-2"

@@ -53,6 +53,7 @@ pub struct MountView {
     pub mount_path: String,
     pub mount_path_short: String,
     pub sso_profile: Option<String>,
+    pub needs_resync: bool,
 }
 
 #[derive(Serialize, Clone)]
@@ -90,6 +91,7 @@ impl AppState {
                 mount_path: m.mount_path().display().to_string(),
                 mount_path_short: config::collapse_tilde(&m.mount_path()),
                 sso_profile: s.sso_profile,
+                needs_resync: s.needs_resync,
                 config: m,
             })
             .collect();

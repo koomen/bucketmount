@@ -9,6 +9,7 @@ mod mac;
 mod rclone;
 mod sso;
 mod supervisor;
+mod sync;
 mod tray;
 
 use app::AppState;

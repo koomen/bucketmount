@@ -1,9 +1,10 @@
 //! One supervisor thread per mount. It starts `rclone nfsmount`, watches the
 //! process, the mount table, rclone's remote-control API and the bucket
 //! itself, and restarts everything with backoff when anything goes wrong.
+//! Synced folders get a different thread body, see `sync.rs`.
 
 use crate::applog::log;
-use crate::config::{self, Config, MountConfig};
+use crate::config::{self, Config, Mode, MountConfig};
 use crate::mac;
 use crate::rclone::{self, Invocation, VfsStats};
 use crate::sso::{self, SsoProfile};
@@ -11,7 +12,7 @@ use serde::Serialize;
 use std::collections::{HashMap, VecDeque};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Stdio};
+use std::process::{Child, ChildStderr, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread::JoinHandle;
@@ -56,7 +57,7 @@ impl State {
     pub fn label(self) -> &'static str {
         match self {
             State::Disabled => "Disabled",
-            State::Starting => "Mounting",
+            State::Starting => "Starting",
             State::Connected => "Connected",
             State::Syncing => "Syncing",
             State::Disconnected => "Connection lost",
@@ -116,6 +117,9 @@ pub struct MountStatus {
     pub log_tail: VecDeque<String>,
     /// The AWS SSO profile behind this mount, if its credentials come from one.
     pub sso_profile: Option<String>,
+    /// Sync mode: bisync lost track of its state; the next restart does a
+    /// full resync.
+    pub needs_resync: bool,
 }
 
 impl MountStatus {
@@ -133,13 +137,14 @@ impl MountStatus {
             last_error: None,
             log_tail: VecDeque::new(),
             sso_profile: None,
+            needs_resync: false,
         }
     }
 }
 
 pub type SharedStatus = Arc<Mutex<MountStatus>>;
 
-fn lock(s: &SharedStatus) -> std::sync::MutexGuard<'_, MountStatus> {
+pub(crate) fn lock(s: &SharedStatus) -> std::sync::MutexGuard<'_, MountStatus> {
     s.lock().unwrap_or_else(|e| e.into_inner())
 }
 
@@ -228,7 +233,10 @@ impl Manager {
         let cfg_for_thread = cfg.clone();
         let thread = std::thread::Builder::new()
             .name(format!("mount-{}", cfg.name))
-            .spawn(move || run(cfg_for_thread, ctx, rclone, health_interval))
+            .spawn(move || match cfg_for_thread.mode {
+                Mode::Mount => run(cfg_for_thread, ctx, rclone, health_interval),
+                Mode::Sync => crate::sync::run(cfg_for_thread, ctx, rclone),
+            })
             .ok();
         Handle { cfg, status, stop, thread }
     }
@@ -242,9 +250,16 @@ impl Manager {
         }
     }
 
-    /// Stop and immediately start again (user-requested).
+    /// Stop and immediately start again (user-requested). A synced folder
+    /// that lost its sync state does a full resync on the way back up.
     pub fn restart(&mut self, name: &str, cfg: &Config) {
+        let resync = self.handles.get(name).is_some_and(|h| lock(&h.status).needs_resync);
         self.stop_one(name);
+        if resync {
+            if let Some(m) = cfg.mounts.iter().find(|m| m.name == name) {
+                crate::sync::forget_state(m);
+            }
+        }
         self.apply(cfg);
     }
 
@@ -281,9 +296,9 @@ impl Manager {
 // Supervisor thread
 // ---------------------------------------------------------------------------
 
-struct Ctx {
-    name: String,
-    status: SharedStatus,
+pub(crate) struct Ctx {
+    pub(crate) name: String,
+    pub(crate) status: SharedStatus,
     stop: Arc<AtomicBool>,
     notify: Notify,
     last_notify: Option<Instant>,
@@ -291,11 +306,11 @@ struct Ctx {
 }
 
 impl Ctx {
-    fn stopping(&self) -> bool {
+    pub(crate) fn stopping(&self) -> bool {
         self.stop.load(Ordering::SeqCst) || TERMINATE.load(Ordering::SeqCst)
     }
 
-    fn set(&mut self, state: State, detail: impl Into<String>) {
+    pub(crate) fn set(&mut self, state: State, detail: impl Into<String>) {
         let detail = detail.into();
         let prev = {
             let mut s = lock(&self.status);
@@ -337,12 +352,12 @@ impl Ctx {
         }
     }
 
-    fn update<F: FnOnce(&mut MountStatus)>(&self, f: F) {
+    pub(crate) fn update<F: FnOnce(&mut MountStatus)>(&self, f: F) {
         f(&mut lock(&self.status));
     }
 
     /// Sleep in small steps so stop requests are honoured quickly.
-    fn wait(&self, d: Duration) {
+    pub(crate) fn wait(&self, d: Duration) {
         let end = Instant::now() + d;
         while Instant::now() < end && !self.stopping() {
             std::thread::sleep(Duration::from_millis(200));
@@ -426,7 +441,7 @@ fn run(cfg: MountConfig, mut ctx: Ctx, rclone: Option<PathBuf>, health_interval:
     log(format!("[{}] supervisor stopped", cfg.name));
 }
 
-fn signin_detail(sso: Option<&SsoProfile>) -> String {
+pub(crate) fn signin_detail(sso: Option<&SsoProfile>) -> String {
     match sso {
         Some(p) => format!("AWS SSO session for profile '{}' has expired", p.profile),
         None => "AWS SSO session has expired".into(),
@@ -460,7 +475,7 @@ fn prepare_mount_point(mount_point: &Path) -> Result<(), String> {
     Ok(())
 }
 
-fn open_log_file(name: &str) -> Option<std::fs::File> {
+pub(crate) fn open_log_file(name: &str) -> Option<std::fs::File> {
     let dir = config::logs_dir();
     std::fs::create_dir_all(&dir).ok()?;
     let path = dir.join(format!("{}.log", rclone::sanitize(name)));
@@ -472,11 +487,44 @@ fn open_log_file(name: &str) -> Option<std::fs::File> {
     std::fs::OpenOptions::new().create(true).append(true).open(path).ok()
 }
 
+/// Stream rclone's log to the mount's log file and keep the tail for the UI.
+/// With `capture`, every line is also collected there (for the caller to
+/// inspect once the thread has finished).
+pub(crate) fn stream_log(
+    stderr: ChildStderr,
+    name: &str,
+    status: SharedStatus,
+    capture: Option<Arc<Mutex<Vec<String>>>>,
+) -> Option<JoinHandle<()>> {
+    let mut file = open_log_file(name);
+    std::thread::Builder::new()
+        .name(format!("log-{name}"))
+        .spawn(move || {
+            for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+                if let Some(f) = file.as_mut() {
+                    let _ = writeln!(f, "{line}");
+                }
+                if let Some(c) = &capture {
+                    c.lock().unwrap_or_else(|e| e.into_inner()).push(line.clone());
+                }
+                let mut s = lock(&status);
+                if line.contains(" ERROR ") || line.contains("Failed to") || line.contains("CRITICAL") {
+                    s.last_error = Some(rclone::summarize_error(&line));
+                }
+                if s.log_tail.len() >= LOG_TAIL_LINES {
+                    s.log_tail.pop_front();
+                }
+                s.log_tail.push_back(line);
+            }
+        })
+        .ok()
+}
+
 pub fn log_path(name: &str) -> PathBuf {
     config::logs_dir().join(format!("{}.log", rclone::sanitize(name)))
 }
 
-fn terminate(child: &mut Child) {
+pub(crate) fn terminate(child: &mut Child) {
     let pid = child.id() as i32;
     unsafe {
         libc::kill(pid, libc::SIGTERM);
@@ -522,29 +570,8 @@ fn run_session(
         s.log_tail.clear();
     });
 
-    // Stream rclone's log to a file and keep the tail for the UI.
     if let Some(stderr) = child.stderr.take() {
-        let status = ctx.status.clone();
-        let mut file = open_log_file(&cfg.name);
-        let name = cfg.name.clone();
-        std::thread::Builder::new()
-            .name(format!("log-{name}"))
-            .spawn(move || {
-                for line in BufReader::new(stderr).lines().map_while(Result::ok) {
-                    if let Some(f) = file.as_mut() {
-                        let _ = writeln!(f, "{line}");
-                    }
-                    let mut s = lock(&status);
-                    if line.contains(" ERROR ") || line.contains("Failed to") || line.contains("CRITICAL") {
-                        s.last_error = Some(rclone::summarize_error(&line));
-                    }
-                    if s.log_tail.len() >= LOG_TAIL_LINES {
-                        s.log_tail.pop_front();
-                    }
-                    s.log_tail.push_back(line);
-                }
-            })
-            .ok();
+        stream_log(stderr, &cfg.name, ctx.status.clone(), None);
     }
 
     let started = Instant::now();

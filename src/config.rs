@@ -36,16 +36,29 @@ impl Default for Config {
     }
 }
 
+/// How a bucket shows up on this Mac.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum Mode {
+    /// An `rclone nfsmount` volume: files are streamed on demand.
+    #[default]
+    Mount,
+    /// A plain local folder kept in two-way sync with the bucket by `rclone bisync`.
+    Sync,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct MountConfig {
     /// Display name; also the default volume / folder name. Must be unique.
     pub name: String,
+    pub mode: Mode,
     pub bucket: String,
     /// Optional directory inside the bucket to mount instead of the root.
     #[serde(skip_serializing_if = "String::is_empty")]
     pub prefix: String,
-    /// Where the volume appears. `~` is expanded.
+    /// Where the volume appears (mount mode) or the local folder (sync
+    /// mode). `~` is expanded.
     pub mount_point: String,
     pub enabled: bool,
     pub read_only: bool,
@@ -74,9 +87,10 @@ pub struct MountConfig {
     pub aws_profile: String,
 
     /// Seconds a written file sits in the local cache before it is uploaded.
+    /// In sync mode: seconds of quiet after a local change before syncing.
     pub write_back_secs: u64,
     /// How long directory listings are cached (how quickly changes made
-    /// elsewhere show up).
+    /// elsewhere show up). In sync mode: how often the bucket is checked.
     pub dir_cache_secs: u64,
     /// Upper bound on the local VFS cache, e.g. "10G".
     pub cache_max_size: String,
@@ -89,6 +103,7 @@ impl Default for MountConfig {
     fn default() -> Self {
         Self {
             name: String::new(),
+            mode: Mode::Mount,
             bucket: String::new(),
             prefix: String::new(),
             mount_point: String::new(),
@@ -178,6 +193,9 @@ impl MountConfig {
         }
         if self.cred_mode() == CredMode::Keys && self.secret_access_key.trim().is_empty() {
             return Err("Secret access key is required when an access key ID is given.".into());
+        }
+        if self.mode == Mode::Sync && self.read_only {
+            return Err("Read only is not supported for synced folders.".into());
         }
         if self.write_back_secs == 0 {
             return Err("Write-back delay must be at least 1 second.".into());
