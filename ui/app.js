@@ -123,7 +123,7 @@ function renderList() {
       <div class="row">${rcloneLine}</div>
       <div class="row"><span class="tiny grow">Config: ${esc(snap.config_path)}</span><button class="btn btn-sm" id="reveal-config">Reveal</button></div>
       <div class="row"><span class="tiny grow">Logs: ${esc(snap.logs_dir)}</span><button class="btn btn-sm" id="open-logs">Open</button></div>
-      <div class="row"><span class="tiny grow">BucketMount ${esc(snap.version)}</span><button class="btn btn-sm" id="quit">Quit BucketMount</button></div>
+      <div class="row"><span class="tiny grow">BucketMount ${esc(snap.version)} · updates install automatically</span><button class="btn btn-sm" id="check-updates">Check for updates</button><button class="btn btn-sm" id="quit">Quit BucketMount</button></div>
     </div>`;
 
   $app.querySelector("#add").onclick = () => openEditor(null);
@@ -139,6 +139,7 @@ function renderList() {
   };
   $app.querySelector("#reveal-config").onclick = () => invoke("reveal_config");
   $app.querySelector("#open-logs").onclick = () => invoke("open_logs");
+  $app.querySelector("#check-updates").onclick = () => { invoke("check_for_updates"); toast("Checking for updates…"); };
   $app.querySelector("#quit").onclick = () => invoke("quit");
 }
 

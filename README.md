@@ -7,8 +7,9 @@ them mounted, and tells you from the menu bar when the connection is lost.
   sidebar). Files you save are uploaded within seconds; files others upload
   appear within a minute.
 - A status dot on the menu bar bucket shows the worst state of all mounts:
-  green connected, blue syncing, orange mounting, red disconnected/down, grey
-  disabled.
+  green connected, blue syncing, orange starting, red disconnected/down, grey
+  disabled. Click it to open or close the window. BucketMount lives only in
+  the menu bar: no Dock icon, and it is not in the app switcher.
 - The `rclone nfsmount` process behind each volume is babysat: if it dies,
   hangs, is ejected, or the bucket becomes unreachable, you get a
   notification and it is restarted with backoff. Nothing needs installing —
@@ -69,7 +70,7 @@ From 0.3.0 on, BucketMount updates itself. About a minute after launch and
 then every four hours it checks the latest release; a newer build is
 downloaded in the background, installed once no mount is uploading or
 syncing, and the app relaunches into it with a notification. **Check for
-Updates…** in the menu bar menu checks right away.
+updates** at the bottom of the window checks right away.
 
 Updates are signed with the key in the `TAURI_SIGNING_PRIVATE_KEY` repository
 secret, and the app refuses anything not signed with it (the public half is
@@ -136,7 +137,7 @@ instance roles; pick one with `aws_profile = "name"`) or
 **AWS SSO (IAM Identity Center).** Point `aws_profile` at a profile in
 `~/.aws/config` that has `sso_session` (or the older `sso_start_url`). The AWS
 CLI is not needed: when the session expires the mount shows *Sign-in required*
-and a notification is posted; click **Sign in** (mount card, menu bar or the
+and a notification is posted; click **Sign in** (mount card or the
 mount's status panel), approve the code in the browser, and the token is cached
 in `~/.aws/sso/cache/` like `aws sso login` would. Mounts re-check right away.
 Short-lived access tokens are refreshed automatically in between.

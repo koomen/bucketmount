@@ -104,16 +104,20 @@ fn main() {
             app::open_logs,
             app::quit,
             app::debug_log,
+            app::check_for_updates,
         ])
         .on_window_event(|window, event| {
             // Closing the window hides it; the app lives on in the menu bar.
             if let WindowEvent::CloseRequested { api, .. } = event {
                 api.prevent_close();
-                let _ = window.hide();
+                app::hide_window(window.app_handle());
             }
         })
         .setup(move |app| {
             let handle = app.handle().clone();
+            // Menu bar only: no Dock icon, not in the app switcher. The
+            // bundle's Info.plist (LSUIElement) does the same from launch.
+            app.set_activation_policy(tauri::ActivationPolicy::Accessory);
             tray::create(&handle)?;
             updater::start(&handle);
 

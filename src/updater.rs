@@ -4,7 +4,7 @@
 //! `latest.json` from the newest release. A newer, correctly signed build is
 //! downloaded in the background, installed over the running app once no
 //! mount is busy, and the app relaunches into it. No user action needed;
-//! "Check for Updates…" in the menu bar menu triggers a check right away.
+//! "Check for updates" in the window triggers a check right away.
 
 use crate::app::AppState;
 use crate::applog::log;

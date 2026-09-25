@@ -132,17 +132,21 @@ impl AppState {
     }
 }
 
-/// Convenience for code that only has an `AppHandle`.
-pub fn lock_cfg(app: &AppHandle) -> Config {
-    lock(&app.state::<AppState>().cfg).clone()
-}
-
 pub fn show_window(app: &AppHandle) {
     if let Some(w) = app.get_webview_window("main") {
         let _ = w.show();
         let _ = w.unminimize();
         let _ = w.set_focus();
     }
+}
+
+/// Hide the window and deactivate the app, so focus goes back to whatever
+/// was in front before.
+pub fn hide_window(app: &AppHandle) {
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.hide();
+    }
+    let _ = app.hide();
 }
 
 /// Start an AWS SSO sign-in for the profile behind `mount` on a background
@@ -354,6 +358,11 @@ pub fn open_logs() {
 #[tauri::command]
 pub fn debug_log(msg: String) {
     crate::applog::log(format!("[ui] {msg}"));
+}
+
+#[tauri::command]
+pub fn check_for_updates() {
+    crate::updater::check_now();
 }
 
 #[tauri::command]

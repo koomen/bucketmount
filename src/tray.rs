@@ -1,12 +1,11 @@
 //! Menu bar status item: a bucket with a coloured badge for the worst mount
-//! state, plus a menu listing every mount.
+//! state. Clicking it opens or closes the main window.
 
-use crate::app::{show_window, AppState, Snapshot};
+use crate::app::{hide_window, show_window, AppState, Snapshot};
 use crate::supervisor::State;
 use tauri::image::Image;
-use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
-use tauri::tray::TrayIconBuilder;
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+use tauri::{AppHandle, Manager};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
@@ -18,33 +17,15 @@ pub const TRAY_ID: &str = "main";
 static DARK: AtomicBool = AtomicBool::new(false);
 
 pub fn create(app: &AppHandle) -> tauri::Result<()> {
+    // No menu: a click on the icon opens or closes the window, which has
+    // everything (status, sign-in, updates, quit).
     TrayIconBuilder::with_id(TRAY_ID)
         .icon(status_icon(DARK.load(Ordering::Relaxed), State::Disabled.rgb()))
         .tooltip("BucketMount")
-        .show_menu_on_left_click(true)
-        .on_menu_event(|app, event| {
-            let id = event.id().as_ref();
-            match id {
-                "open" => show_window(app),
-                "check-updates" => crate::updater::check_now(),
-                "quit" => app.exit(0),
-                _ => {
-                    if let Some(name) = id.strip_prefix("open:") {
-                        if let Some(m) = crate::app::lock_cfg(app).mounts.iter().find(|m| m.name == name) {
-                            crate::mac::open_in_finder(&m.mount_path());
-                        }
-                    } else if let Some(name) = id.strip_prefix("login:") {
-                        show_window(app);
-                        if let Some(m) = crate::app::lock_cfg(app).mounts.iter().find(|m| m.name == name) {
-                            if let Err(e) = crate::app::start_sso_login(app, m) {
-                                crate::mac::notify("BucketMount", &e);
-                            }
-                        }
-                    } else if let Some(name) = id.strip_prefix("edit:") {
-                        show_window(app);
-                        let _ = app.emit("edit-mount", name.to_string());
-                    }
-                }
+        .show_menu_on_left_click(false)
+        .on_tray_icon_event(|tray, event| {
+            if let TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. } = event {
+                toggle_window(tray.app_handle());
             }
         })
         .build(app)?;
@@ -63,7 +44,7 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
     Ok(())
 }
 
-/// Rebuild menu, icon and tooltip from the current state. Safe to call from
+/// Rebuild icon and tooltip from the current state. Safe to call from
 /// any thread; the work is dispatched to the main thread.
 pub fn refresh(app: &AppHandle) {
     let handle = app.clone();
@@ -77,30 +58,6 @@ pub fn refresh(app: &AppHandle) {
 
 fn apply(app: &AppHandle, snap: &Snapshot) -> tauri::Result<()> {
     let Some(tray) = app.tray_by_id(TRAY_ID) else { return Ok(()) };
-
-    let menu = Menu::new(app)?;
-    if snap.mounts.is_empty() {
-        menu.append(&MenuItem::with_id(app, "none", "No mounts configured", false, None::<&str>)?)?;
-        menu.append(&PredefinedMenuItem::separator(app)?)?;
-    }
-    for m in &snap.mounts {
-        let header = format!("{}  —  {}", m.config.name, m.state_label);
-        menu.append(&MenuItem::with_id(app, format!("hdr:{}", m.config.name), header, false, None::<&str>)?)?;
-        if !m.detail.is_empty() && m.detail != m.state_label {
-            let d = truncate(&m.detail, 70);
-            menu.append(&MenuItem::with_id(app, format!("det:{}", m.config.name), format!("      {d}"), false, None::<&str>)?)?;
-        }
-        if m.state == State::SignInRequired {
-            menu.append(&MenuItem::with_id(app, format!("login:{}", m.config.name), "      Sign in to AWS…", true, None::<&str>)?)?;
-        }
-        menu.append(&MenuItem::with_id(app, format!("open:{}", m.config.name), "      Open in Finder", m.mounted, None::<&str>)?)?;
-        menu.append(&MenuItem::with_id(app, format!("edit:{}", m.config.name), "      Settings…", true, None::<&str>)?)?;
-        menu.append(&PredefinedMenuItem::separator(app)?)?;
-    }
-    menu.append(&MenuItem::with_id(app, "open", "Open BucketMount", true, None::<&str>)?)?;
-    menu.append(&MenuItem::with_id(app, "check-updates", "Check for Updates…", true, None::<&str>)?)?;
-    menu.append(&MenuItem::with_id(app, "quit", "Quit BucketMount", true, None::<&str>)?)?;
-    tray.set_menu(Some(menu))?;
 
     let active: Vec<_> = snap.mounts.iter().filter(|m| m.state != State::Disabled).collect();
     let worst = active.iter().map(|m| m.state).max_by_key(|s| s.severity()).unwrap_or(State::Disabled);
@@ -122,13 +79,14 @@ fn apply(app: &AppHandle, snap: &Snapshot) -> tauri::Result<()> {
     Ok(())
 }
 
-fn truncate(s: &str, max: usize) -> String {
-    if s.chars().count() <= max {
-        s.to_string()
+/// Open the window, or close it when it is already open in front.
+fn toggle_window(app: &AppHandle) {
+    let Some(w) = app.get_webview_window("main") else { return };
+    let in_front = w.is_visible().unwrap_or(false) && w.is_focused().unwrap_or(false);
+    if in_front {
+        hide_window(app);
     } else {
-        let mut t: String = s.chars().take(max - 1).collect();
-        t.push('…');
-        t
+        show_window(app);
     }
 }
 
