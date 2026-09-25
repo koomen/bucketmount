@@ -1,6 +1,6 @@
 [package]
 name = "bucketmount"
-version = "0.3.0"
+version = "0.3.1"
 edition = "2021"
 description = "Mount S3 buckets as macOS volumes, kept alive and monitored from the menu bar"
 license = "MIT"
