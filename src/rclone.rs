@@ -183,6 +183,13 @@ pub fn bisync_args(m: &MountConfig, inv: &Invocation, folder: &Path, workdir: &P
         "10s".into(),
         "--timeout".into(),
         "60s".into(),
+        // Fail fast and let the sync loop retry with backoff: rclone's own
+        // retries keep an unreachable bucket looking like "Syncing" for
+        // minutes, so the user would not hear about it.
+        "--retries".into(),
+        "1".into(),
+        "--low-level-retries".into(),
+        "3".into(),
         "--log-level".into(),
         "INFO".into(),
         "--use-json-log=false".into(),

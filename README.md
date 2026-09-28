@@ -15,6 +15,11 @@ them mounted, and tells you from the menu bar when the connection is lost.
   notification and it is restarted with backoff. Nothing needs installing —
   rclone ships inside the app and macOS's built-in NFS client does the mounting
   (no kernel extensions, no macFUSE).
+- Whenever a bucket stops syncing (unreachable for over a minute, AWS
+  sign-in needed, an error), BucketMount posts a macOS notification, and
+  another when it is back in sync. It asks for notification permission on
+  first launch; while notifications are off the window shows a banner with a
+  button to turn them on.
 - Everything is driven by one file, `~/.config/bucketmount/config.toml`.
   Copy it to a new Mac, launch the app, and your buckets come back.
 

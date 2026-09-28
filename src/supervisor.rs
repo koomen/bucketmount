@@ -34,7 +34,9 @@ const UNMOUNTED_GRACE: Duration = Duration::from_secs(8);
 const RC_HUNG_AFTER: Duration = Duration::from_secs(90);
 const RC_POLL: Duration = Duration::from_secs(5);
 const HEALTHY_RESET: Duration = Duration::from_secs(300);
-const NOTIFY_THROTTLE: Duration = Duration::from_secs(60);
+/// How long a connection problem must last before the user is notified;
+/// problems that need the user (sign-in, errors) are notified at once.
+const OUTAGE_GRACE: Duration = Duration::from_secs(60);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -242,8 +244,8 @@ impl Manager {
             status: status.clone(),
             stop: stop.clone(),
             notify: self.notify.clone(),
-            last_notify: None,
-            ever_healthy: false,
+            alerted: None,
+            problem_since: None,
         };
         let rclone = self.rclone.clone();
         if let Some(r) = &rclone {
@@ -347,8 +349,11 @@ pub(crate) struct Ctx {
     pub(crate) status: SharedStatus,
     stop: Arc<AtomicBool>,
     notify: Notify,
-    last_notify: Option<Instant>,
-    ever_healthy: bool,
+    /// The problem the user was last notified about in the current outage;
+    /// cleared (with a "back in sync" notification) once things work again.
+    alerted: Option<State>,
+    /// When the current outage began.
+    problem_since: Option<Instant>,
 }
 
 impl Ctx {
@@ -358,43 +363,58 @@ impl Ctx {
 
     pub(crate) fn set(&mut self, state: State, detail: impl Into<String>) {
         let detail = detail.into();
-        let prev = {
+        let changed = {
             let mut s = lock(&self.status);
-            if s.state == state && s.detail == detail {
-                return;
-            }
-            let prev = s.state;
-            if prev != state {
+            let changed = s.state != state || s.detail != detail;
+            if s.state != state {
                 s.since = Instant::now();
-                log(format!("[{}] {} -> {}: {}", self.name, prev.label(), state.label(), detail));
+                log(format!("[{}] {} -> {}: {}", self.name, s.state.label(), state.label(), detail));
             }
             s.state = state;
             s.detail = detail.clone();
-            if state.is_healthy() {
+            if changed && state.is_healthy() {
                 s.last_ok = Some(Instant::now());
             }
-            prev
+            changed
         };
-        (self.notify)();
+        if changed {
+            (self.notify)();
+        }
+        // Also for an unchanged state: the outage may have outlasted the grace period.
+        if let Some((title, body)) = self.alert(state, detail, Instant::now()) {
+            mac::notify(&title, &body);
+        }
+    }
 
-        // Notifications on meaningful transitions only.
-        if state.is_healthy() {
-            if prev.is_problem() && self.ever_healthy {
-                mac::notify(config::APP_NAME, &format!("{}: connection restored", self.name));
+    /// Notify the user when a mount stops working (once per outage, again
+    /// if the reason changes) and when it is back. Only Connected counts as
+    /// back: a failing synced folder passes through Syncing on every retry.
+    /// Returns the notification to post, if any.
+    fn alert(&mut self, state: State, detail: String, now: Instant) -> Option<(String, String)> {
+        if state.is_problem() {
+            let since = *self.problem_since.get_or_insert(now);
+            let urgent = matches!(state, State::SignInRequired | State::Error);
+            if self.alerted == Some(state) || !(urgent || now.duration_since(since) >= OUTAGE_GRACE) {
+                return None;
             }
-            self.ever_healthy = true;
-        } else if state.is_problem() && !prev.is_problem() {
-            let throttled = self.last_notify.map_or(false, |t| t.elapsed() < NOTIFY_THROTTLE);
-            if !throttled {
-                self.last_notify = Some(Instant::now());
-                let what = match state {
-                    State::Disconnected => "connection to the bucket lost",
-                    State::SignInRequired => "AWS sign-in required. Open BucketMount and click Sign in",
-                    State::Down => "mount stopped, restarting",
-                    _ => "needs attention",
-                };
-                mac::notify(config::APP_NAME, &format!("{}: {what}. {}", self.name, detail));
-            }
+            self.alerted = Some(state);
+            let what = match state {
+                State::Disconnected => "can't reach the bucket",
+                State::SignInRequired => "AWS sign-in required",
+                State::Down => "mount stopped",
+                _ => "not syncing",
+            };
+            let body = if state == State::SignInRequired {
+                "Files are not syncing. Open BucketMount and click Sign in.".to_string()
+            } else {
+                detail
+            };
+            Some((format!("{}: {what}", self.name), body))
+        } else if state == State::Connected {
+            self.problem_since = None;
+            self.alerted.take().map(|_| (format!("{}: back in sync", self.name), "Everything is up to date again.".into()))
+        } else {
+            None
         }
     }
 
@@ -766,5 +786,66 @@ fn run_session(
         }
 
         std::thread::sleep(Duration::from_secs(1));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ctx() -> Ctx {
+        Ctx {
+            name: "pete-bucket".into(),
+            status: Arc::new(Mutex::new(MountStatus::new(State::Starting, ""))),
+            stop: Arc::new(AtomicBool::new(false)),
+            notify: Arc::new(|| {}),
+            alerted: None,
+            problem_since: None,
+        }
+    }
+
+    fn title(n: Option<(String, String)>) -> Option<String> {
+        n.map(|(t, _)| t)
+    }
+
+    #[test]
+    fn short_blips_are_not_notified() {
+        let (mut c, t0) = (ctx(), Instant::now());
+        assert_eq!(title(c.alert(State::Disconnected, "bisync aborted".into(), t0)), None);
+        assert_eq!(title(c.alert(State::Connected, "Up to date".into(), t0 + Duration::from_secs(5))), None);
+    }
+
+    #[test]
+    fn a_failing_sync_is_notified_once_despite_retries() {
+        let (mut c, t0) = (ctx(), Instant::now());
+        let s = |n| t0 + Duration::from_secs(n);
+        assert_eq!(title(c.alert(State::Disconnected, "x".into(), s(0))), None);
+        // Each retry passes through Syncing; that is not "back".
+        assert_eq!(title(c.alert(State::Syncing, "Syncing local changes…".into(), s(30))), None);
+        assert_eq!(
+            title(c.alert(State::Disconnected, "x".into(), s(61))).as_deref(),
+            Some("pete-bucket: can't reach the bucket")
+        );
+        assert_eq!(title(c.alert(State::Syncing, "".into(), s(120))), None);
+        assert_eq!(title(c.alert(State::Disconnected, "x".into(), s(122))), None);
+        // A different reason is worth a new notification, at once when it needs the user.
+        assert_eq!(
+            title(c.alert(State::SignInRequired, "".into(), s(180))).as_deref(),
+            Some("pete-bucket: AWS sign-in required")
+        );
+        assert_eq!(
+            title(c.alert(State::Connected, "Up to date".into(), s(300))).as_deref(),
+            Some("pete-bucket: back in sync")
+        );
+        assert_eq!(title(c.alert(State::Connected, "Up to date".into(), s(360))), None);
+    }
+
+    #[test]
+    fn problems_needing_the_user_are_notified_at_once() {
+        let mut c = ctx();
+        let n = c.alert(State::SignInRequired, "".into(), Instant::now()).unwrap();
+        assert_eq!(n.1, "Files are not syncing. Open BucketMount and click Sign in.");
+        let mut c = ctx();
+        assert!(c.alert(State::Error, "Sync state was lost".into(), Instant::now()).is_some());
     }
 }

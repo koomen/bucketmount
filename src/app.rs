@@ -69,6 +69,7 @@ pub struct Snapshot {
     pub show_login_prompt: bool,
     pub version: &'static str,
     pub sso_login: Option<LoginView>,
+    pub notifications: crate::notifications::Permission,
 }
 
 impl AppState {
@@ -109,6 +110,7 @@ impl AppState {
             rclone_path: rclone_path.map(|p| config::collapse_tilde(&p)),
             version: env!("CARGO_PKG_VERSION"),
             sso_login: lock(&self.login).as_ref().map(|l| l.view.clone()),
+            notifications: crate::notifications::permission(),
         }
     }
 
@@ -215,7 +217,20 @@ pub fn start_sso_login(app: &AppHandle, mount: &MountConfig) -> Result<(), Strin
 
 #[tauri::command]
 pub fn snapshot(state: State<'_, AppState>) -> Snapshot {
+    // Picks up changes made in System Settings; emits state-changed if so.
+    crate::notifications::refresh();
     state.snapshot()
+}
+
+/// The "notifications are off" banner's button: ask if never asked,
+/// otherwise open System Settings where they can be turned back on.
+#[tauri::command]
+pub fn fix_notifications() {
+    use crate::notifications::{self, Permission};
+    match notifications::permission() {
+        Permission::NotAsked | Permission::Unknown => notifications::request(),
+        _ => notifications::open_settings(),
+    }
 }
 
 #[tauri::command]

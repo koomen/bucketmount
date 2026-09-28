@@ -191,9 +191,13 @@ dependencies = [
 name = "bucketmount"
 version = "0.4.0"
 dependencies = [
+ "block2",
  "dirs 7.0.0",
  "libc",
  "notify",
+ "objc2",
+ "objc2-foundation",
+ "objc2-user-notifications",
  "serde",
  "serde_json",
  "sha1_smol",
@@ -2344,7 +2348,10 @@ version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9df9128cbbfef73cda168416ccf7f837b62737d748333bfe9ab71c245d76613e"
 dependencies = [
+ "bitflags 2.13.2",
+ "block2",
  "objc2",
+ "objc2-core-location",
  "objc2-foundation",
 ]
 

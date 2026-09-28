@@ -6,6 +6,7 @@ mod app;
 mod applog;
 mod config;
 mod mac;
+mod notifications;
 mod rclone;
 mod sso;
 mod supervisor;
@@ -97,6 +98,7 @@ fn main() {
             app::sso_login,
             app::cancel_sso_login,
             app::restart_mount,
+            app::fix_notifications,
             app::log_tail,
             app::open_mount,
             app::show_log,
@@ -119,6 +121,13 @@ fn main() {
             // bundle's Info.plist (LSUIElement) does the same from launch.
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
             tray::create(&handle)?;
+            let (h1, h2) = (handle.clone(), handle.clone());
+            notifications::init(
+                move || {
+                    let _ = h1.emit("state-changed", ());
+                },
+                move || app::show_window(&h2),
+            );
             updater::start(&handle);
 
             // Start the supervisors now that the tray exists to show them.

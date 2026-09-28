@@ -79,6 +79,17 @@ function summaryText() {
   return `${active.length} mount${active.length > 1 ? "s" : ""} connected`;
 }
 
+// Shown while BucketMount may not post notifications, so a folder that
+// stops syncing would go unnoticed.
+function notificationsBanner() {
+  const text = {
+    not_asked: ["BucketMount needs permission to notify you when a folder stops syncing.", "Allow notifications"],
+    denied: ["Notifications are turned off, so BucketMount can't tell you when a folder stops syncing.", "Open Notification Settings"],
+  }[snap.notifications];
+  if (!text) return "";
+  return `<div class="banner warn"><span class="grow">${esc(text[0])}</span><button class="btn btn-sm btn-primary" id="fix-notifications">${esc(text[1])}</button></div>`;
+}
+
 function renderList() {
   const cards = snap.mounts.map((m) => {
     const problem = ["disconnected", "sign_in_required", "down", "error"].includes(m.state);
@@ -119,6 +130,7 @@ function renderList() {
       <button class="btn btn-primary" id="add">Add mount</button>
     </div>
     ${snap.config_error ? `<div class="banner">Config file could not be read: ${esc(snap.config_error)}</div>` : ""}
+    ${notificationsBanner()}
     ${body}
     <div class="footer">
       <div class="row">
@@ -132,6 +144,8 @@ function renderList() {
     </div>`;
 
   $app.querySelector("#add").onclick = () => openEditor(null);
+  const fix = $app.querySelector("#fix-notifications");
+  if (fix) fix.onclick = () => invoke("fix_notifications");
   $app.querySelectorAll("[data-open]").forEach((b) => (b.onclick = () => invoke("open_mount", { name: b.dataset.open })));
   $app.querySelectorAll("[data-edit]").forEach((b) => (b.onclick = () => openEditor(b.dataset.edit)));
   $app.querySelectorAll("[data-signin]").forEach((b) => (b.onclick = () => {
@@ -431,6 +445,8 @@ document.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && view.kind === "edit") { view = { kind: "list" }; render(); }
 });
 listen("state-changed", refresh);
+// Coming back from System Settings: the snapshot re-reads the notification permission.
+window.addEventListener("focus", refresh);
 listen("toast", (e) => toast(e.payload));
 listen("toast-error", (e) => toast(e.payload, true));
 listen("edit-mount", (e) => { if (snap) openEditor(e.payload); });

@@ -143,17 +143,7 @@ pub fn dark_mode() -> bool {
 
 /// User-visible macOS notification.
 pub fn notify(title: &str, body: &str) {
-    let esc = |s: &str| s.replace('\\', "\\\\").replace('"', "\\\"");
-    let script = format!(
-        "display notification \"{}\" with title \"{}\"",
-        esc(body),
-        esc(title)
-    );
-    let _ = Command::new("/usr/bin/osascript")
-        .args(["-e", &script])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn();
+    crate::notifications::post(title, body);
 }
 
 // ---------------------------------------------------------------------------

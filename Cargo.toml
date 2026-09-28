@@ -20,6 +20,10 @@ sha1_smol = "1.0.1"
 time = { version = "0.3", features = ["formatting", "parsing"] }
 notify = "8"
 tauri-plugin-updater = "2"
+objc2 = "0.6"
+block2 = "0.6"
+objc2-foundation = { version = "0.3", features = ["NSBundle", "NSString", "NSUUID", "NSError", "NSObject"] }
+objc2-user-notifications = { version = "0.3", features = ["block2", "UNUserNotificationCenter", "UNNotification", "UNNotificationContent", "UNNotificationRequest", "UNNotificationResponse", "UNNotificationSettings", "UNNotificationSound", "UNNotificationTrigger"] }
 
 [profile.release]
 opt-level = 2
