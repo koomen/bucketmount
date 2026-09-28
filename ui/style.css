@@ -103,6 +103,11 @@ h2 { font-size: 13px; font-weight: 600; color: var(--text-2); text-transform: up
 .card .detail { overflow-wrap: anywhere; }
 .card .detail { margin-top: 6px; color: var(--text-2); }
 .card .detail.problem { color: var(--danger); }
+.backups { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; cursor: help; }
+.backups::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+.backups.on { color: #34c759; }
+.backups.off { color: #ff9f0a; }
+.backups.unknown { color: var(--text-2); }
 .card .actions { display: flex; gap: 8px; align-self: center; }
 
 .empty { text-align: center; padding: 60px 20px 40px; color: var(--text-2); }

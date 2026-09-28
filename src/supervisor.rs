@@ -102,6 +102,20 @@ impl State {
     }
 }
 
+/// Whether deleted and overwritten files can be restored from the bucket
+/// (S3 versioning).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Backups {
+    Unknown,
+    On,
+    Off,
+}
+
+/// How often bucket versioning is re-checked, once known / while unknown.
+const BACKUPS_RECHECK: Duration = Duration::from_secs(3600);
+const BACKUPS_RETRY: Duration = Duration::from_secs(300);
+
 #[derive(Debug, Clone)]
 pub struct MountStatus {
     pub state: State,
@@ -120,6 +134,7 @@ pub struct MountStatus {
     /// Sync mode: bisync lost track of its state; the next restart does a
     /// full resync.
     pub needs_resync: bool,
+    pub backups: Backups,
 }
 
 impl MountStatus {
@@ -138,6 +153,7 @@ impl MountStatus {
             log_tail: VecDeque::new(),
             sso_profile: None,
             needs_resync: false,
+            backups: Backups::Unknown,
         }
     }
 }
@@ -230,6 +246,9 @@ impl Manager {
             ever_healthy: false,
         };
         let rclone = self.rclone.clone();
+        if let Some(r) = &rclone {
+            watch_backups(rclone::invocation(r, &cfg), status.clone(), stop.clone(), self.notify.clone(), &cfg.name);
+        }
         let cfg_for_thread = cfg.clone();
         let thread = std::thread::Builder::new()
             .name(format!("mount-{}", cfg.name))
@@ -290,6 +309,33 @@ impl Manager {
             self.stop_one(&name);
         }
     }
+}
+
+/// Keep `status.backups` up to date on a thread of its own, until `stop`.
+fn watch_backups(inv: Invocation, status: SharedStatus, stop: Arc<AtomicBool>, notify: Notify, name: &str) {
+    let name = name.to_string();
+    let _ = std::thread::Builder::new().name(format!("backups-{name}")).spawn(move || {
+        while !stop.load(Ordering::SeqCst) {
+            let backups = match rclone::bucket_versioning(&inv) {
+                Some(true) => Backups::On,
+                Some(false) => Backups::Off,
+                None => Backups::Unknown,
+            };
+            let changed = {
+                let mut s = lock(&status);
+                std::mem::replace(&mut s.backups, backups) != backups
+            };
+            if changed {
+                log(format!("[{name}] bucket versioning (backups): {backups:?}"));
+                notify();
+            }
+            let wait = if backups == Backups::Unknown { BACKUPS_RETRY } else { BACKUPS_RECHECK };
+            let until = Instant::now() + wait;
+            while Instant::now() < until && !stop.load(Ordering::SeqCst) {
+                std::thread::sleep(Duration::from_millis(500));
+            }
+        }
+    });
 }
 
 // ---------------------------------------------------------------------------

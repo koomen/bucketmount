@@ -137,10 +137,6 @@ fn run_bisync(
     // A failed resync says the same, but the next attempt is a resync anyway.
     if !resync && (text.contains("Must run --resync") || text.contains("must run --resync")) {
         Err(Failure::NeedsResync(summary))
-    } else if text.contains("too many deletes") {
-        Err(Failure::Other(format!(
-            "Stopped: more than half the files would be deleted. Check the folder, then pass --force under Extra rclone flags for one run. ({summary})"
-        )))
     } else {
         Err(Failure::Other(summary))
     }

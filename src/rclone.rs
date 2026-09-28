@@ -159,6 +159,11 @@ pub const SYNC_EXCLUDES: &[&str] = &[".DS_Store", "._*", ".*.swp", ".*.swx", ".~
 /// Arguments for one `rclone bisync` run between `folder` and the bucket.
 /// `resync` rebuilds bisync's state from scratch, merging both sides and
 /// keeping the newer copy of any file that differs.
+///
+/// Deletions always go through, however many there are (`--force` skips
+/// bisync's stop when more than half the files would be deleted): renaming
+/// a big folder must not stall syncing. Bucket versioning is what makes
+/// deletes recoverable; the UI shows whether it is on.
 pub fn bisync_args(m: &MountConfig, inv: &Invocation, folder: &Path, workdir: &Path, resync: bool) -> Vec<String> {
     let mut args: Vec<String> = vec![
         "bisync".into(),
@@ -181,6 +186,7 @@ pub fn bisync_args(m: &MountConfig, inv: &Invocation, folder: &Path, workdir: &P
         "--log-level".into(),
         "INFO".into(),
         "--use-json-log=false".into(),
+        "--force".into(),
     ];
     for pat in SYNC_EXCLUDES {
         args.push("--exclude".into());
@@ -247,6 +253,20 @@ pub fn run_with_timeout(mut cmd: Command, timeout: Duration) -> Result<Finished,
 
 /// One cheap listing request against the bucket. Returns the number of
 /// top-level entries on success.
+/// Whether the bucket keeps old versions of changed and deleted files (S3
+/// versioning). `None` when it cannot be told: offline, signed out, or not
+/// an S3 bucket.
+pub fn bucket_versioning(inv: &Invocation) -> Option<bool> {
+    let mut cmd = inv.command();
+    cmd.args(["backend", "versioning", "--contimeout", "10s", "--timeout", "20s", "--retries", "1", &inv.remote]);
+    let fin = run_with_timeout(cmd, Duration::from_secs(40)).ok()?;
+    if !fin.success {
+        return None;
+    }
+    // "Enabled", "Suspended" (old versions kept, new ones not) or "Unversioned".
+    Some(serde_json::from_str::<String>(fin.stdout.trim()).ok()? == "Enabled")
+}
+
 pub fn check_connectivity(inv: &Invocation, timeout: Duration) -> Result<usize, String> {
     let mut cmd = inv.command();
     cmd.args([

@@ -84,12 +84,17 @@ function renderList() {
     const problem = ["disconnected", "sign_in_required", "down", "error"].includes(m.state);
     const detail = m.detail && m.detail !== m.state_label ? `<div class="detail ${problem ? "problem" : ""}">${esc(m.detail)}${m.restarts ? ` <span class="tiny">· ${m.restarts} restart${m.restarts > 1 ? "s" : ""}</span>` : ""}</div>` : "";
     const path = m.config.prefix ? `${m.config.bucket}/${m.config.prefix}` : m.config.bucket;
+    const backups = {
+      on: ["Backups on", "Bucket versioning is on: every deleted or overwritten file can be restored from the bucket's version history."],
+      off: ["Backups off", `Bucket versioning is off: files deleted or overwritten ${m.config.mode === "sync" ? "in this folder or " : ""}in the bucket are gone for good. Turn on versioning for the bucket (S3 console → Properties → Bucket Versioning) to keep old versions.`],
+      unknown: ["Backups unknown", "Could not check whether bucket versioning is on (offline, signed out, or not an S3 bucket). Checked again every few minutes."],
+    }[m.backups];
     return `
       <div class="card">
         <span class="dot" style="background:${m.color}"></span>
         <div>
           <div class="title"><span class="name">${esc(m.config.name)}</span><span class="state" style="color:${m.color}">${esc(m.state_label)}</span></div>
-          <div class="meta"><span title="s3://${esc(path)}">s3://${esc(path)}</span><span title="${esc(m.mount_path)}">${esc(m.mount_path_short)}</span></div>
+          <div class="meta"><span title="s3://${esc(path)}">s3://${esc(path)}</span><span title="${esc(m.mount_path)}">${esc(m.mount_path_short)}</span><span class="backups ${m.backups}" title="${esc(backups[1])}">${esc(backups[0])}</span></div>
           ${detail}
         </div>
         <div class="actions">

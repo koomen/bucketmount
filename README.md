@@ -34,8 +34,14 @@ two-way sync with the bucket using `rclone bisync`:
   any file that exists on both sides. After that, a file changed on both sides
   between syncs is kept twice, as `name.conflict1` and `name.conflict2`.
 - `.DS_Store`, `._*` AppleDouble files and editor swap files are not synced.
-- If more than half the files would be deleted in one run, bisync stops and
-  asks you to check (see the mount's log).
+- Deletions always sync, however many files are involved (renaming a big
+  folder deletes every file under the old name), so syncing never stalls
+  waiting for you. Each deleted file is listed in the mount's log.
+- To make deletes and overwrites recoverable, turn on **versioning** for the
+  bucket (S3 console → Properties → Bucket Versioning, or
+  `aws s3api put-bucket-versioning --bucket NAME --versioning-configuration Status=Enabled`).
+  Each mount shows **Backups on** / **Backups off** in the window, checked
+  hourly.
 - If bisync ever loses track of its state, the folder shows an error with a
   **Resync** button that merges both sides again.
 
